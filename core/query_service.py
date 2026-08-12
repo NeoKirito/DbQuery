@@ -189,11 +189,11 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
         (u"—— 查询参数 ——", ''),
     ]
     info_rows += params_info
-    info_rows += [
-        ('', ''),
-        (u"—— SQL 语句 ——", ''),
-        (final_sql, ''),
-    ]
+    # info_rows += [
+    #     ('', ''),
+    #     (u"—— SQL 语句 ——", ''),
+    #     (final_sql, ''),
+    # ]
     for r_idx, (k, v) in enumerate(info_rows, 1):
         ws2.cell(row=r_idx, column=1, value=k)
         if v != '':

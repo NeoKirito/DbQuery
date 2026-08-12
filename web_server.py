@@ -75,13 +75,15 @@ db_lock = threading.Lock()  # DBManager 非线程安全，查询时加锁
 @app.route('/')
 def index():
     """首页 — 表单列表"""
+    hide_header = request.args.get('hide_header') == '1'
     forms_data = load_all_forms(FORMS_DIR)
-    return render_template('index.html', forms_data=forms_data)
+    return render_template('index.html', forms_data=forms_data, hide_header=hide_header)
 
 
 @app.route('/query/<path:file_path>')
 def query_page(file_path):
     """查询页面"""
+    hide_header = request.args.get('hide_header') == '1'
     file_path = unquote(file_path)  # 解码 %23 → #
     abs_path = os.path.join(BASE_DIR, file_path)
     if not os.path.isfile(abs_path):
@@ -91,7 +93,7 @@ def query_page(file_path):
         form_data = serialize_form(form, BASE_DIR)
     except Exception as e:
         return "表单解析失败: {}".format(e), 500
-    return render_template('query.html', form=form_data, file_path=file_path)
+    return render_template('query.html', form=form_data, file_path=file_path, hide_header=hide_header)
 
 
 # ════════════════════════════════════════
@@ -244,10 +246,24 @@ def api_export():
 #  入口
 # ════════════════════════════════════════
 
+def get_local_ip():
+    """获取本机局域网 IP"""
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
 if __name__ == '__main__':
+    local_ip = get_local_ip()
     logger.info("=" * 50)
     logger.info("DBQuery Web Server starting...")
     logger.info("Forms directory: %s", FORMS_DIR)
-    logger.info("Access: http://localhost:5000")
+    logger.info("Local Access:  http://localhost:5000")
+    logger.info("Network Access: http://%s:5000", local_ip)
     logger.info("=" * 50)
     app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)

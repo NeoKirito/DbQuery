@@ -10,6 +10,7 @@
     {% block head %}{% endblock %}
 </head>
 <body>
+    {% if not hide_header %}
     <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
         <div class="container-fluid">
             <a class="navbar-brand app-brand" href="/">📊 数据库查询工具</a>
@@ -20,6 +21,7 @@
             </div>
         </div>
     </nav>
+    {% endif %}
     <div class="app-body">
         {% block content %}{% endblock %}
     </div>

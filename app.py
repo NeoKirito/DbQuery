@@ -26,12 +26,14 @@ def run_desktop():
 
 def run_web(port=5000):
     """启动 Web 版"""
-    from web_server import app, logger
+    from web_server import app, logger, get_local_ip
+    local_ip = get_local_ip()
     logger.info("Starting web server on port %d", port)
     print()
     print("=" * 50)
     print("  DBQuery Web 服务已启动")
-    print("  浏览器访问：http://localhost:{}".format(port))
+    print("  本地访问：  http://localhost:{}".format(port))
+    print("  局域网访问：http://{}:{}".format(local_ip, port))
     print("  按 Ctrl+C 停止")
     print("=" * 50)
     print()
