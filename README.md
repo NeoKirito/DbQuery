@@ -101,7 +101,7 @@ WHERE CreateDate >= '{start_date}'
 | `number` | `count = 数量 | number` | 数字输入框 | 原有行为。 |
 | `select:A,B` | `status = 状态 | select:全部,完成` | 下拉选择 | 原有行为。 |
 | `textarea` | `remark = 备注 | textarea` | 多行文本框 | 安全回退为可输入的文本控件。 |
-| `checkbox` | `active = 有效 | checkbox | 1` | 勾选后提交 `1`，未勾选提交空值 | 安全回退为可输入的文本控件。 |
+| `checkbox` | `active = 有效 | checkbox | 1` | 勾选后提交 `1`，未勾选提交 `0` | 安全回退为可输入的文本控件。 |
 | `radio:A,B` | `gender = 性别 | radio:男,女` | 单选项 | 安全回退为可输入的文本控件。 |
 | `hidden` | `source = 来源 | hidden | PEIS` | 隐藏参数 | 安全回退为可输入的文本控件。 |
 

@@ -151,6 +151,29 @@ class DBManager:
         return 'timeout' in text or 'hyt00' in text or 'hyt01' in text
 
     @staticmethod
+    def _is_transient_connection_error(exc):
+        """仅识别可安全重连后重试的 SQL Server 连接/网络错误。"""
+        sqlstates = []
+        for arg in getattr(exc, 'args', ()):
+            if isinstance(arg, tuple) and arg:
+                sqlstates.append(str(arg[0]).upper())
+            elif isinstance(arg, str):
+                sqlstates.append(arg[:5].upper())
+        if any(state.startswith('08') for state in sqlstates):
+            return True
+
+        text = str(exc).lower()
+        transient_markers = (
+            'communication link failure',
+            'connection reset',
+            'connection was forcibly closed',
+            'network-related',
+            'network error',
+            'transport-level error',
+        )
+        return any(marker in text for marker in transient_markers)
+
+    @staticmethod
     def _close_quietly(resource):
         if resource is None:
             return
@@ -159,12 +182,10 @@ class DBManager:
         except Exception:
             pass
 
-    def _run_limited_query(self, conn, sql, query_timeout, max_rows):
+    def _run_limited_query(self, conn, sql, max_rows):
         cursor = None
         try:
             cursor = conn.cursor()
-            # pyodbc 的 cursor.timeout 是执行 SQL 的查询超时，不是连接超时。
-            cursor.timeout = query_timeout
             logger.debug('Executing SQL: %s', sql[:200] if sql else 'EMPTY')
             cursor.execute(sql)
             if cursor.description is None:
@@ -182,38 +203,44 @@ class DBManager:
         finally:
             self._close_quietly(cursor)
 
-    def execute_query_limited(self, sql, query_timeout=None, max_rows=None):
-        """执行一次查询，最多读取 max_rows + 1 行以识别截断。
+    def execute_query_limited(self, sql, query_timeout=None, max_rows=None, query_type='select'):
+        """执行受 Web 限制保护的查询，最多读取 max_rows + 1 行。
 
-        每次调用都建立并关闭独立连接。除明确的超时外，驱动异常会以新连接重试一次，
-        用于覆盖短暂网络中断；连接、游标在任意路径都会关闭。
+        ``pyodbc.connect(timeout=...)`` 只用于登录/连接超时；实际 SQL 执行超时必须在
+        创建 cursor 前设置 ``Connection.timeout``。SELECT 仅在明确的连接/网络瞬态错误
+        上使用新连接重试一次；EXEC 和查询超时均不自动重试，避免重复执行副作用。
         """
         web_config = self.get_web_config()
         query_timeout = self._positive_int(
             query_timeout, web_config['query_timeout'], maximum=3600
         )
         max_rows = self._positive_int(max_rows, web_config['max_rows'], maximum=100000)
+        normalized_type = (query_type or 'select').lower().strip()
+        allow_retry = normalized_type == 'select'
 
-        last_error = None
         for attempt in range(2):
             conn = None
             try:
                 conn = self._open_connection()
-                return self._run_limited_query(conn, sql, query_timeout, max_rows)
+                # pyodbc 4.x 的真实查询超时属性属于 Connection，而非 Cursor。
+                # 必须在创建 cursor 之前赋值，连接/login timeout 仍由 _open_connection 区分处理。
+                conn.timeout = query_timeout
+                return self._run_limited_query(conn, sql, max_rows)
             except pyodbc.Error as exc:
                 if self._is_timeout_error(exc):
                     logger.warning('Query timed out after %ss: %s', query_timeout, exc)
                     raise QueryTimeoutError('查询超时') from exc
-                last_error = exc
-                logger.warning('pyodbc error on query attempt %d/2: %s', attempt + 1, exc)
-                if attempt == 0:
+                if allow_retry and attempt == 0 and self._is_transient_connection_error(exc):
+                    logger.warning('Transient SELECT connection error; retrying once: %s', exc)
                     continue
+                logger.warning(
+                    'pyodbc error on %s query attempt %d/2; retry disabled or unsafe: %s',
+                    normalized_type, attempt + 1, exc
+                )
                 raise
             finally:
                 self._close_quietly(conn)
 
-        if last_error:
-            raise last_error
         raise RuntimeError('查询执行失败')
 
     def _run_unlimited_query(self, conn, sql):

@@ -178,7 +178,7 @@ function collectParams() {
         if ($input.is(':radio')) {
             if ($input.is(':checked')) params[name] = $input.val() || '';
         } else if ($input.is(':checkbox')) {
-            params[name] = $input.is(':checked') ? ($input.data('checked-value') || $input.val() || '1') : '';
+            params[name] = $input.is(':checked') ? '1' : '0';
         } else {
             params[name] = $input.val() || '';
         }
@@ -270,18 +270,30 @@ function querySummary(data) {
 }
 
 function renderResult(data) {
+    var $table = $('#result-table');
     if (dataTable) {
         dataTable.destroy();
         dataTable = null;
     }
-    $('#result-table').empty();
+
+    // DataTables destroy 后保留或显式恢复标准 table 结构，不能清空整个 table。
+    var $thead = $table.children('thead');
+    var $tbody = $table.children('tbody');
+    if (!$thead.length) {
+        $thead = $('<thead id="result-thead"></thead>').appendTo($table);
+    }
+    if (!$tbody.length) {
+        $tbody = $('<tbody id="result-tbody"></tbody>').appendTo($table);
+    }
+    $thead.empty();
+    $tbody.empty();
 
     var head = '<tr>';
     for (var index = 0; index < data.columns.length; index++) {
         head += '<th>' + esc(data.columns[index]) + '</th>';
     }
     head += '</tr>';
-    $('#result-thead').html(head);
+    $thead.html(head);
 
     var body = '';
     for (var rowIndex = 0; rowIndex < data.rows.length; rowIndex++) {
@@ -296,9 +308,9 @@ function renderResult(data) {
         }
         body += '</tr>';
     }
-    $('#result-tbody').html(body);
+    $tbody.html(body);
 
-    dataTable = $('#result-table').DataTable({
+    dataTable = $table.DataTable({
         paging: true,
         pageLength: 100,
         lengthMenu: [50, 100, 200, 500, 1000],

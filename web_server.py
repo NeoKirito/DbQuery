@@ -96,6 +96,20 @@ def normalize_rows(rows):
     return safe_rows
 
 
+def has_missing_required_params(form, params):
+    """在服务端重复执行必填校验，防止绕过浏览器端校验。"""
+    for param in form.params:
+        if not param.required:
+            continue
+        value = params.get(param.name)
+        if param.ptype == 'checkbox':
+            if str(value or '') != '1':
+                return True
+        elif value is None or not str(value).strip():
+            return True
+    return False
+
+
 @app.route('/')
 def index():
     """首页：表单列表。"""
@@ -161,6 +175,8 @@ def api_query():
         return error_response('查询配置加载失败，请联系管理员。', 500)
     if form is None:
         return error_response('查询方案不存在或已停用。', 404)
+    if has_missing_required_params(form, params):
+        return error_response('请填写完整的查询条件。', 400)
 
     try:
         sql = build_final_sql(form, params)
@@ -181,7 +197,8 @@ def api_query():
         columns, rows, truncated = db_manager.execute_query_limited(
             sql,
             query_timeout=web_config['query_timeout'],
-            max_rows=web_config['max_rows']
+            max_rows=web_config['max_rows'],
+            query_type=form.query_type
         )
     except QueryTimeoutError:
         return error_response(

@@ -20,61 +20,156 @@ except ImportError:
         drivers=lambda: []
     )
 
-from form_parser import FormParser
-from core.query_service import build_final_sql, serialize_form
+import db_manager as db_manager_module
 import web_server
+from core.query_service import build_final_sql, export_to_excel, serialize_form
 from db_manager import DBManager, QueryTimeoutError
+from form_parser import FormParser, QueryForm, QueryParam
 
 
-class LimitedQueryExecutionTests(unittest.TestCase):
-    def test_limited_query_reads_one_extra_record_and_closes_cursor(self):
-        class FakeCursor:
-            def __init__(self):
-                self.description = [('编号',), ('姓名',)]
-                self.fetch_size = None
-                self.timeout = None
-                self.closed = False
+class QueryExecutionBehaviorTests(unittest.TestCase):
+    class FakeCursor:
+        def __init__(self, rows=None):
+            self.description = [('编号',), ('姓名',)]
+            self.fetch_size = None
+            self.closed = False
+            self.rows = rows if rows is not None else [(1, '甲'), (2, '乙'), (3, '丙')]
 
-            def execute(self, sql):
-                self.sql = sql
+        def execute(self, sql):
+            self.sql = sql
 
-            def fetchmany(self, size):
-                self.fetch_size = size
-                return [(1, '甲'), (2, '乙'), (3, '丙')]
+        def fetchmany(self, size):
+            self.fetch_size = size
+            return self.rows
 
-            def close(self):
-                self.closed = True
+        def close(self):
+            self.closed = True
 
-        class FakeConnection:
-            def __init__(self):
-                self.cursor_instance = FakeCursor()
+    class FakeConnection:
+        def __init__(self, cursor=None):
+            self.cursor_instance = cursor or QueryExecutionBehaviorTests.FakeCursor()
+            self.timeout = None
+            self.timeout_when_cursor_created = None
+            self.closed = False
 
-            def cursor(self):
-                return self.cursor_instance
+        def cursor(self):
+            self.timeout_when_cursor_created = self.timeout
+            return self.cursor_instance
 
+        def close(self):
+            self.closed = True
+
+    def make_manager(self):
         manager = DBManager.__new__(DBManager)
-        connection = FakeConnection()
-        columns, rows, truncated = manager._run_limited_query(
-            connection, 'SELECT 1', query_timeout=60, max_rows=2
+        manager.get_web_config = lambda: {'query_timeout': 60, 'max_rows': 5000}
+        return manager
+
+    def test_connection_query_timeout_is_set_before_cursor_and_limited_rows_are_read(self):
+        manager = self.make_manager()
+        connection = self.FakeConnection()
+        manager._open_connection = lambda: connection
+
+        columns, rows, truncated = manager.execute_query_limited(
+            'SELECT 1', query_timeout=61, max_rows=2, query_type='select'
         )
 
         self.assertEqual(columns, ['编号', '姓名'])
         self.assertEqual(rows, [[1, '甲'], [2, '乙']])
         self.assertTrue(truncated)
+        self.assertEqual(connection.timeout, 61)
+        self.assertEqual(connection.timeout_when_cursor_created, 61)
         self.assertEqual(connection.cursor_instance.fetch_size, 3)
-        self.assertEqual(connection.cursor_instance.timeout, 60)
         self.assertTrue(connection.cursor_instance.closed)
+        self.assertTrue(connection.closed)
+        self.assertFalse(hasattr(connection.cursor_instance, 'timeout'))
+
+    def test_limited_query_can_run_with_cursor_that_has_no_timeout_attribute(self):
+        manager = self.make_manager()
+        connection = self.FakeConnection()
+        columns, rows, truncated = manager._run_limited_query(connection, 'SELECT 1', max_rows=2)
+
+        self.assertEqual(columns, ['编号', '姓名'])
+        self.assertEqual(rows, [[1, '甲'], [2, '乙']])
+        self.assertTrue(truncated)
+        self.assertFalse(hasattr(connection.cursor_instance, 'timeout'))
+
+    def test_select_retries_once_only_for_transient_connection_error(self):
+        class TestPyodbcError(Exception):
+            pass
+
+        manager = self.make_manager()
+        connections = [self.FakeConnection(), self.FakeConnection()]
+        manager._open_connection = lambda: connections.pop(0)
+        calls = []
+
+        def run_query(conn, sql, max_rows):
+            calls.append(conn)
+            if len(calls) == 1:
+                raise TestPyodbcError(('08S01', 'Communication link failure'))
+            return ['编号'], [[1]], False
+
+        manager._run_limited_query = run_query
+        with patch.object(db_manager_module.pyodbc, 'Error', TestPyodbcError):
+            columns, rows, truncated = manager.execute_query_limited(
+                'SELECT 1', query_timeout=60, max_rows=10, query_type='select'
+            )
+
+        self.assertEqual(columns, ['编号'])
+        self.assertEqual(rows, [[1]])
+        self.assertFalse(truncated)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(conn.timeout == 60 for conn in calls))
+        self.assertTrue(all(conn.closed for conn in calls))
+
+    def test_exec_does_not_retry_transient_error(self):
+        class TestPyodbcError(Exception):
+            pass
+
+        manager = self.make_manager()
+        connection = self.FakeConnection()
+        manager._open_connection = lambda: connection
+        calls = []
+
+        def run_query(conn, sql, max_rows):
+            calls.append(conn)
+            raise TestPyodbcError(('08S01', 'Communication link failure'))
+
+        manager._run_limited_query = run_query
+        with patch.object(db_manager_module.pyodbc, 'Error', TestPyodbcError):
+            with self.assertRaises(TestPyodbcError):
+                manager.execute_query_limited(
+                    'EXEC dbo.usp_Report', query_timeout=60, max_rows=10, query_type='exec'
+                )
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(connection.closed)
+
+    def test_timeout_does_not_retry(self):
+        class TestPyodbcError(Exception):
+            pass
+
+        manager = self.make_manager()
+        connection = self.FakeConnection()
+        manager._open_connection = lambda: connection
+        calls = []
+
+        def run_query(conn, sql, max_rows):
+            calls.append(conn)
+            raise TestPyodbcError(('HYT00', 'Query timeout expired'))
+
+        manager._run_limited_query = run_query
+        with patch.object(db_manager_module.pyodbc, 'Error', TestPyodbcError):
+            with self.assertRaises(QueryTimeoutError):
+                manager.execute_query_limited(
+                    'SELECT 1', query_timeout=60, max_rows=10, query_type='select'
+                )
+
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(connection.closed)
 
     def test_desktop_interface_keeps_unlimited_path_separate_from_web_limits(self):
-        class FakeConnection:
-            def __init__(self):
-                self.closed = False
-
-            def close(self):
-                self.closed = True
-
         manager = DBManager.__new__(DBManager)
-        connection = FakeConnection()
+        connection = self.FakeConnection()
         manager._open_connection = lambda: connection
         manager._run_unlimited_query = lambda conn, sql: (['编号'], [[1], [2], [3]])
         manager.execute_query_limited = lambda *args, **kwargs: self.fail('桌面端不应调用 Web 限制路径')
@@ -170,12 +265,18 @@ SELECT '{keyword}' AS Keyword
         self.assertTrue(FormParser.is_safe_sql('EXEC dbo.usp_Test @P=1', 'exec')[0])
         self.assertFalse(FormParser.is_safe_sql('EXEC dbo.usp_Test; DELETE FROM T', 'exec')[0])
 
+    def test_checkbox_web_submit_contract_is_one_or_zero(self):
+        js_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'js', 'app.js')
+        with open(js_path, 'r', encoding='utf-8') as js_file:
+            source = js_file.read()
+        self.assertIn("params[name] = $input.is(':checked') ? '1' : '0';", source)
+
 
 class SuccessfulManager:
     def get_web_config(self):
         return {'query_timeout': 60, 'max_rows': 2}
 
-    def execute_query_limited(self, sql, query_timeout, max_rows):
+    def execute_query_limited(self, sql, query_timeout, max_rows, query_type):
         return ['编号', '姓名'], [[1, '张三'], [2, '李四']], True
 
 
@@ -183,7 +284,7 @@ class TimeoutManager:
     def get_web_config(self):
         return {'query_timeout': 60, 'max_rows': 5000}
 
-    def execute_query_limited(self, sql, query_timeout, max_rows):
+    def execute_query_limited(self, sql, query_timeout, max_rows, query_type):
         raise QueryTimeoutError('driver timeout')
 
 
@@ -191,7 +292,7 @@ class FailingManager:
     def get_web_config(self):
         return {'query_timeout': 60, 'max_rows': 5000}
 
-    def execute_query_limited(self, sql, query_timeout, max_rows):
+    def execute_query_limited(self, sql, query_timeout, max_rows, query_type):
         raise RuntimeError('internal driver details')
 
 
@@ -239,6 +340,19 @@ class WebRouteTests(unittest.TestCase):
         self.assertTrue(payload['truncated'])
         self.assertEqual(payload['max_rows'], 2)
 
+    def test_required_conditions_are_validated_before_database_query(self):
+        form = QueryForm()
+        form.query_type = 'select'
+        form.sql = "SELECT '{keyword}'"
+        form.params = [QueryParam('keyword', '关键词', required=True)]
+        with patch('web_server.get_form_from_path', return_value=(form, 'forms/test.qry', '/tmp/test.qry')):
+            response = self.client.post('/api/query', json={
+                'file_path': 'forms/test.qry',
+                'params': {'keyword': ''}
+            })
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error'], '请填写完整的查询条件。')
+
     def test_timeout_and_generic_error_do_not_expose_driver_details(self):
         with patch('web_server.DBManager', TimeoutManager):
             response = self.query()
@@ -269,6 +383,32 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn('.xlsx', disposition)
         self.assertNotIn('export.xlsx', disposition)
         response.close()
+
+
+class ExcelCopyTests(unittest.TestCase):
+    def test_query_info_sheet_uses_business_labels(self):
+        import openpyxl
+
+        descriptor, path = tempfile.mkstemp(suffix='.xlsx')
+        os.close(descriptor)
+        try:
+            export_to_excel(
+                path, ['编号', '姓名'], [[1, '张三']],
+                form_title='每日体检人员明细', form_desc='测试说明',
+                elapsed=0.3, params_info=[('开始日期', '2026-08-12')]
+            )
+            workbook = openpyxl.load_workbook(path, read_only=True)
+            sheet = workbook['查询信息']
+            labels = [sheet.cell(row=index, column=1).value for index in range(1, 9)]
+            workbook.close()
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+
+        self.assertEqual(
+            labels,
+            ['查询项目', '项目说明', '查询时间', '导出记录数', '字段数', '查询耗时', None, '—— 查询条件 ——']
+        )
 
 
 if __name__ == '__main__':

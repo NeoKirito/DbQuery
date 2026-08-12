@@ -179,14 +179,14 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
     # ── Sheet2: 查询信息 ──
     ws2 = wb.create_sheet(u"查询信息")
     info_rows = [
-        (u"表单名称",   form_title),
-        (u"表单描述",   form_desc or ''),
+        (u"查询项目",   form_title),
+        (u"项目说明",   form_desc or ''),
         (u"查询时间",   datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
-        (u"导出行数",   len(rows)),
-        (u"列数",       len(columns)),
+        (u"导出记录数", len(rows)),
+        (u"字段数",     len(columns)),
         (u"查询耗时",   u"{:.2f} 秒".format(elapsed)),
         ('', ''),
-        (u"—— 查询参数 ——", ''),
+        (u"—— 查询条件 ——", ''),
     ]
     info_rows += params_info
     # info_rows += [
