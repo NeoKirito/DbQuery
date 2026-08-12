@@ -1,13 +1,16 @@
-@echo off
+﻿@echo off
 chcp 65001 > nul
-title DBQuery Web Server
+title DBQuery Web Server (.exe)
 echo ================================================
-echo   DBQuery Web 服务启动中...
+echo   DBQuery Web Server Starting (EXE Mode)...
 echo ================================================
 echo.
-python app.py --web
-if errorlevel 1 (
-    echo.
-    echo [错误] 启动失败，请检查 Python 环境和依赖。
-    pause
-)
+echo Local Access:  http://localhost:5000
+echo.
+echo Hint: Add ?hide_header=1 to URL to hide navigation bar.
+echo ================================================
+echo.
+cd /d " %~dp0dist_final\DBQuery\DBQuery\
+start DBQuery.exe --web
+echo Service started in background.
+timeout /t 3
