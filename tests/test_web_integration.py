@@ -397,10 +397,15 @@ class ExcelCopyTests(unittest.TestCase):
                 form_title='每日体检人员明细', form_desc='测试说明',
                 elapsed=0.3, params_info=[('开始日期', '2026-08-12')]
             )
-            workbook = openpyxl.load_workbook(path, read_only=True)
-            sheet = workbook['查询信息']
-            labels = [sheet.cell(row=index, column=1).value for index in range(1, 9)]
-            workbook.close()
+            # Windows + Python 3.7 的 read_only 工作簿可能延迟释放 ZipFile 句柄，
+            # 使临时 xlsx 无法删除；普通读取模式可在 close() 后确定性释放文件。
+            workbook = openpyxl.load_workbook(path, read_only=False, data_only=True)
+            try:
+                sheet = workbook['查询信息']
+                labels = [sheet.cell(row=index, column=1).value for index in range(1, 9)]
+            finally:
+                workbook.close()
+                del workbook
         finally:
             if os.path.exists(path):
                 os.remove(path)
