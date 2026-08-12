@@ -1,12 +1,12 @@
-# -*- coding: utf-8 -*-
 """
-表单解析模块
-解析 .qry 文件，提取元信息、查询参数、SQL脚本
+表单解析模块。
+
+解析 .qry 文件，提取元信息、查询参数和 SQL 脚本。新增 Web 友好的控件属性
+保持可选，旧格式无需修改即可继续使用。
 """
 import os
 import re
 
-# 新建表单时的默认模板内容
 TEMPLATE = u"""\
 [meta]
 title = 新建查询
@@ -17,22 +17,34 @@ description = 查询描述（可选）
 
 [params]
 # 查询条件配置，格式：
-#   参数名 = 显示标签 | 类型 | 默认值
+#   参数名 = 显示标签 | 类型 | 默认值 | 可选属性...
 #
 # 支持的类型：
-#   text          文本输入框
-#   date          日期选择（YYYY-MM-DD）
-#   datetime      日期时间选择
-#   number        数字输入框
-#   select:A,B,C  下拉选项（逗号分隔）
+#   text                    文本输入框
+#   date                    日期选择（YYYY-MM-DD）
+#   datetime                日期时间选择
+#   number                  数字输入框
+#   select:全部,启用,禁用    下拉选项（逗号分隔）
+#   textarea                多行文本
+#   checkbox                复选框（选中值为 1）
+#   radio:男,女              单选项（逗号分隔）
+#   hidden                  隐藏参数
 #
-# 默认值中可用 {today} 代表今日日期
+# 可选属性：
+#   placeholder=输入关键字
+#   required
+#   width=220px（或 220、35%、18rem）
+#
+# 默认值中可用 {today} 代表今日日期。
+# 旧格式仍完全兼容，例如：keyword = 关键词 | text
 #
 # SELECT 模式示例：
-# start_date = 开始日期 | date
-# end_date   = 结束日期 | date | {today}
-# status     = 状态     | select:全部,启用,禁用 | 全部
-# keyword    = 关键字   | text
+# start_date = 开始日期 | date | {today} | required | width=150
+# keyword    = 关键词 | text | | placeholder=姓名、手机号或编号 | width=240px
+# remark     = 备注 | textarea | | placeholder=可输入多行备注
+# enabled    = 仅启用 | checkbox | 1
+# gender     = 性别 | radio:全部,男,女 | 全部
+# source     = 来源系统 | hidden | PEIS
 #
 # 存储过程模式示例（参数名需与存储过程参数一致）：
 # start_date = 开始日期 | date
@@ -50,157 +62,190 @@ WHERE 1=1
 """
 
 
-class QueryParam(object):
-    """单个查询参数描述"""
-    def __init__(self, name, label, ptype='text', options=None, default=''):
-        self.name    = name
-        self.label   = label
-        self.ptype   = ptype          # text | date | datetime | number | select
-        self.options = options or []  # select 时的选项列表
+class QueryParam:
+    """单个查询参数描述。"""
+
+    def __init__(self, name, label, ptype='text', options=None, default='',
+                 placeholder='', required=False, width=''):
+        self.name = name
+        self.label = label
+        self.ptype = ptype
+        self.options = options or []
         self.default = default
+        self.placeholder = placeholder
+        self.required = required
+        self.width = width
 
 
-class QueryForm(object):
-    """完整的查询表单"""
+class QueryForm:
+    """完整的查询表单。"""
+
     def __init__(self):
-        self.title       = ''
+        self.title = ''
         self.description = ''
-        self.group       = ''
-        self.query_type  = 'select'  # 'select' 或 'exec'（存储过程）
-        self.params      = []
-        self.sql         = ''
-        self.file_path   = ''
+        self.group = ''
+        self.query_type = 'select'
+        self.params = []
+        self.sql = ''
+        self.file_path = ''
 
 
-class FormParser(object):
+class FormParser:
+    _BASIC_TYPES = ('text', 'date', 'datetime', 'number', 'textarea', 'checkbox', 'hidden')
+    _WIDTH_PATTERN = re.compile(r'^\d+(?:\.\d+)?(?:px|%|rem|em|vw)?$', re.IGNORECASE)
 
     @staticmethod
     def _get_section(content, name):
-        """提取指定 section 的内容"""
-        pat = r'\[' + name + r'\](.*?)(?=\n\s*\[|\Z)'
-        m = re.search(pat, content, re.DOTALL | re.IGNORECASE)
-        return m.group(1).strip() if m else ''
+        """提取指定 section 的内容。"""
+        pattern = r'\[' + name + r'\](.*?)(?=\n\s*\[|\Z)'
+        match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
+        return match.group(1).strip() if match else ''
+
+    @staticmethod
+    def _parse_type(raw_type):
+        """解析类型及 select/radio 的静态选项；未知类型安全回退 text。"""
+        raw_type = (raw_type or 'text').strip()
+        lower_type = raw_type.lower()
+        if lower_type.startswith('select:'):
+            return 'select', [item.strip() for item in raw_type.split(':', 1)[1].split(',') if item.strip()]
+        if lower_type.startswith('radio:'):
+            return 'radio', [item.strip() for item in raw_type.split(':', 1)[1].split(',') if item.strip()]
+        if lower_type in FormParser._BASIC_TYPES:
+            return lower_type, []
+        return 'text', []
+
+    @staticmethod
+    def _normalize_width(value):
+        """仅接受常用的安全 CSS 长度，纯数字按 px 处理。"""
+        value = (value or '').strip()
+        if not value or not FormParser._WIDTH_PATTERN.match(value):
+            return ''
+        if value.isdigit():
+            return value + 'px'
+        return value
+
+    @staticmethod
+    def _parse_param_attributes(parts):
+        """从默认值之后解析可选属性，容忍未知属性和错误输入。"""
+        default = ''
+        placeholder = ''
+        required = False
+        width = ''
+        default_assigned = False
+
+        for raw_part in parts:
+            token = raw_part.strip()
+            lower_token = token.lower()
+            if lower_token == 'required':
+                required = True
+                continue
+            if '=' in token:
+                key, value = token.split('=', 1)
+                key = key.strip().lower()
+                value = value.strip()
+                if key == 'placeholder':
+                    placeholder = value
+                    continue
+                if key == 'required':
+                    required = value.lower() in ('1', 'true', 'yes', 'on', '是')
+                    continue
+                if key == 'width':
+                    width = FormParser._normalize_width(value)
+                    continue
+            if not default_assigned:
+                default = token
+                default_assigned = True
+
+        return default, placeholder, required, width
 
     @staticmethod
     def parse_file(file_path):
         form = QueryForm()
         form.file_path = file_path
 
-        with open(file_path, 'r', encoding='utf-8-sig') as f:
-            content = f.read()
+        with open(file_path, 'r', encoding='utf-8-sig') as form_file:
+            content = form_file.read()
 
-        # ---- [meta] ----
         for line in FormParser._get_section(content, 'meta').splitlines():
             line = line.strip()
             if not line or line.startswith('#') or line.startswith(';'):
                 continue
             if '=' in line:
-                k, v = line.split('=', 1)
-                k = k.strip().lower()
-                v = v.strip()
-                if k == 'title':
-                    form.title = v
-                elif k == 'description':
-                    form.description = v
-                elif k == 'group':
-                    form.group = v
-                elif k == 'type':
-                    form.query_type = v.lower().strip()
+                key, value = line.split('=', 1)
+                key = key.strip().lower()
+                value = value.strip()
+                if key == 'title':
+                    form.title = value
+                elif key == 'description':
+                    form.description = value
+                elif key == 'group':
+                    form.group = value
+                elif key == 'type':
+                    form.query_type = value.lower().strip()
 
-        # 无标题时用文件名
         if not form.title:
             form.title = os.path.splitext(os.path.basename(file_path))[0]
-
-        # 无分组时用父目录名
         if not form.group:
             parent_dir = os.path.basename(os.path.dirname(file_path))
-            forms_dir  = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
             form.group = parent_dir if parent_dir.lower() != 'forms' else '默认'
 
-        # ---- [params] ----
         for line in FormParser._get_section(content, 'params').splitlines():
             line = line.strip()
-            if not line or line.startswith('#') or line.startswith(';'):
-                continue
-            if '=' not in line:
+            if not line or line.startswith('#') or line.startswith(';') or '=' not in line:
                 continue
             name, rest = line.split('=', 1)
-            name  = name.strip()
-            parts = [p.strip() for p in rest.split('|')]
+            name = name.strip()
+            if not name:
+                continue
+            parts = [part.strip() for part in rest.split('|')]
+            label = parts[0] if parts and parts[0] else name
+            raw_type = parts[1] if len(parts) >= 2 else 'text'
+            ptype, options = FormParser._parse_type(raw_type)
+            default, placeholder, required, width = FormParser._parse_param_attributes(parts[2:])
+            form.params.append(QueryParam(
+                name, label, ptype, options, default, placeholder, required, width
+            ))
 
-            label   = parts[0] if parts else name
-            ptype   = 'text'
-            options = []
-            default = ''
-
-            if len(parts) >= 2:
-                t = parts[1].lower()
-                if t.startswith('select:'):
-                    ptype   = 'select'
-                    options = [x.strip() for x in t[7:].split(',')]
-                elif t in ('text', 'date', 'datetime', 'number'):
-                    ptype = t
-                # 其他未知类型回退到 text
-
-            if len(parts) >= 3:
-                default = parts[2]
-
-            form.params.append(QueryParam(name, label, ptype, options, default))
-
-        # ---- [sql] ----
         form.sql = FormParser._get_section(content, 'sql')
-
         return form
 
     @staticmethod
     def is_safe_sql(sql, query_type='select'):
-        """
-        安全检查
-        query_type='select'：只允许 SELECT 语句
-        query_type='exec'  ：允许 EXEC/EXECUTE 存储过程调用
-        返回 (bool, reason_str)
-        """
-        # 去除注释
+        """安全检查：SELECT 仅允许查询；exec 仅允许受控存储过程调用。"""
         clean = re.sub(r'--[^\n]*', '', sql)
         clean = re.sub(r'/\*.*?\*/', '', clean, flags=re.DOTALL)
         clean = clean.strip()
 
         if not clean:
-            return False, "SQL内容为空"
+            return False, 'SQL内容为空'
 
-        # ---- 存储过程模式 ----
         if query_type == 'exec':
             first_word = clean.split()[0].upper()
             if first_word not in ('EXEC', 'EXECUTE'):
-                return False, "存储过程模式下，SQL 必须以 EXEC 或 EXECUTE 开头"
-
-            # 存储过程仍需禁止的危险关键字
-            blocked_exec = (r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE'
-                            r'|XP_|SP_EXECUTESQL)\b')
-            m = re.search(blocked_exec, clean, re.IGNORECASE)
-            if m:
-                return False, "存储过程 SQL 包含禁止的关键字：{}".format(m.group().strip())
+                return False, '存储过程模式下，SQL 必须以 EXEC 或 EXECUTE 开头'
+            blocked_exec = (
+                r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|XP_|SP_EXECUTESQL)\b'
+            )
+            match = re.search(blocked_exec, clean, re.IGNORECASE)
+            if match:
+                return False, '存储过程 SQL 包含禁止的关键字：{}'.format(match.group().strip())
             return True, 'OK'
 
-        # ---- SELECT 模式 ----
         tokens = clean.split()
         if not tokens or tokens[0].upper() != 'SELECT':
-            return False, "SQL必须以 SELECT 开头，本工具仅允许查询操作"
+            return False, 'SQL必须以 SELECT 开头，本工具仅允许查询操作'
 
-        blocked = (r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE'
-                   r'|EXEC|EXECUTE|XP_|SP_EXECUTESQL|INTO\s+\w+)\b')
-        m = re.search(blocked, clean, re.IGNORECASE)
-        if m:
-            return False, "SQL 包含禁止的关键字：{}".format(m.group().strip())
-
+        blocked = (
+            r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|XP_|SP_EXECUTESQL|INTO\s+\w+)\b'
+        )
+        match = re.search(blocked, clean, re.IGNORECASE)
+        if match:
+            return False, 'SQL 包含禁止的关键字：{}'.format(match.group().strip())
         return True, 'OK'
 
     @staticmethod
     def load_forms_from_dir(forms_dir):
-        """
-        扫描 forms_dir 及其子目录中所有 .qry 文件
-        返回 dict: { group_name: [QueryForm, ...] }
-        """
+        """扫描 forms_dir 及其子目录中所有 .qry 文件，按分组返回。"""
         result = {}
         if not os.path.exists(forms_dir):
             os.makedirs(forms_dir)
@@ -208,14 +253,14 @@ class FormParser(object):
 
         for root, dirs, files in os.walk(forms_dir):
             dirs.sort()
-            for fn in sorted(files):
-                if fn.lower().endswith('.qry'):
-                    path = os.path.join(root, fn)
-                    try:
-                        form = FormParser.parse_file(path)
-                        g = form.group or '默认'
-                        result.setdefault(g, []).append(form)
-                    except Exception as e:
-                        print("[WARN] 加载表单失败 {}: {}".format(path, e))
-
+            for filename in sorted(files):
+                if not filename.lower().endswith('.qry'):
+                    continue
+                path = os.path.join(root, filename)
+                try:
+                    form = FormParser.parse_file(path)
+                    group = form.group or '默认'
+                    result.setdefault(group, []).append(form)
+                except Exception as exc:
+                    print('[WARN] 加载表单失败 {}: {}'.format(path, exc))
         return result

@@ -1,269 +1,299 @@
-# -*- coding: utf-8 -*-
 """
-DBQuery Web 服务
-启动方式：python web_server.py
-浏览器访问：http://localhost:5000
+DBQuery Web 服务。
+
+启动方式：python web_server.py（默认端口 8094）。
 """
-import os
-import sys
-import time
 import datetime
 import logging
+import os
+import sys
+import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor
+import time
 from urllib.parse import unquote
 
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, jsonify, render_template, request, send_file
 from flask.json.provider import DefaultJSONProvider
 
-# ── 路径设置 ──
 if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
+    # PyInstaller 5 的 onedir 与 PyInstaller 6 的 _internal 布局均可解析。
+    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 sys.path.insert(0, BASE_DIR)
 
-from db_manager import DBManager
+from db_manager import DBManager, QueryTimeoutError
 from form_parser import FormParser
-from core.query_service import (
-    build_final_sql, export_to_excel, serialize_form, load_all_forms
-)
+from core.query_service import build_final_sql, export_to_excel, load_all_forms, serialize_form
 
-# ── 日志 ──
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('DBQuery.web')
 
-# ── 常量 ──
 FORMS_DIR = os.path.join(BASE_DIR, 'forms')
 
 
-# ════════════════════════════════════════
-#  JSON 序列化辅助
-# ════════════════════════════════════════
-
 class DBQueryJSONProvider(DefaultJSONProvider):
-    """处理 datetime 等非标准 JSON 类型"""
+    """处理 datetime 等非标准 JSON 类型。"""
+
     def default(self, obj, **kwargs):
         if isinstance(obj, (datetime.datetime, datetime.date)):
             return str(obj)
         if isinstance(obj, bytes):
             return obj.decode('utf-8', errors='replace')
-        return super(DBQueryJSONProvider, self).default(obj, **kwargs)
+        return super().default(obj, **kwargs)
 
 
-# ── Flask 应用 ──
-app = Flask(__name__,
-            template_folder=os.path.join(BASE_DIR, 'templates'),
-            static_folder=os.path.join(BASE_DIR, 'static'))
+app = Flask(
+    __name__,
+    template_folder=os.path.join(BASE_DIR, 'templates'),
+    static_folder=os.path.join(BASE_DIR, 'static')
+)
 app.json_provider_class = DBQueryJSONProvider
 app.json = DBQueryJSONProvider(app)
 
-# ── 全局对象 ──
-db_manager = DBManager()
-executor = ThreadPoolExecutor(max_workers=4)
-db_lock = threading.Lock()  # DBManager 非线程安全，查询时加锁
+
+def get_embed_context():
+    """统一解析页面级嵌入状态，供所有页面模板复用。"""
+    hide_header = request.args.get('hide_header') == '1'
+    embed = request.args.get('embed') == '1' or hide_header
+    sidebar_hidden = request.args.get('sidebar') == '0'
+    return {
+        'embed_mode': embed,
+        'hide_header': hide_header or embed,
+        'sidebar_hidden': sidebar_hidden,
+    }
 
 
-# ════════════════════════════════════════
-#  页面路由
-# ════════════════════════════════════════
+def error_response(message, status=500, error_type=None):
+    """返回一致的 API 错误 JSON，便于前端页内提示。"""
+    payload = {'error': message}
+    if error_type:
+        payload['error_type'] = error_type
+    return jsonify(payload), status
+
+
+def get_form_from_path(file_path):
+    """加载并解析请求指定的表单，保持既有相对路径约定。"""
+    decoded_path = unquote(file_path or '')
+    abs_path = os.path.join(BASE_DIR, decoded_path)
+    if not os.path.isfile(abs_path):
+        return None, decoded_path, None
+    return FormParser.parse_file(abs_path), decoded_path, abs_path
+
+
+def normalize_rows(rows):
+    """将 bytes 转为可读文本；日期由 JSON provider 统一处理。"""
+    safe_rows = []
+    for row in rows:
+        safe_rows.append([
+            value.decode('utf-8', errors='replace') if isinstance(value, bytes) else value
+            for value in row
+        ])
+    return safe_rows
+
 
 @app.route('/')
 def index():
-    """首页 — 表单列表"""
-    hide_header = request.args.get('hide_header') == '1'
-    forms_data = load_all_forms(FORMS_DIR)
-    return render_template('index.html', forms_data=forms_data, hide_header=hide_header)
+    """首页：表单列表。"""
+    page_context = get_embed_context()
+    return render_template(
+        'index.html', forms_data=load_all_forms(FORMS_DIR), **page_context
+    )
 
 
 @app.route('/query/<path:file_path>')
 def query_page(file_path):
-    """查询页面"""
-    hide_header = request.args.get('hide_header') == '1'
-    file_path = unquote(file_path)  # 解码 %23 → #
-    abs_path = os.path.join(BASE_DIR, file_path)
-    if not os.path.isfile(abs_path):
-        return "表单不存在", 404
+    """查询页面。"""
+    page_context = get_embed_context()
     try:
-        form = FormParser.parse_file(abs_path)
-        form_data = serialize_form(form, BASE_DIR)
-    except Exception as e:
-        return "表单解析失败: {}".format(e), 500
-    return render_template('query.html', form=form_data, file_path=file_path, hide_header=hide_header)
+        form, decoded_path, _ = get_form_from_path(file_path)
+    except Exception as exc:
+        logger.exception('表单解析失败: %s', file_path)
+        return '查询配置加载失败，请联系管理员。', 500
+    if form is None:
+        return '查询方案不存在或已停用。', 404
+    return render_template(
+        'query.html',
+        form=serialize_form(form, BASE_DIR),
+        file_path=decoded_path,
+        **page_context
+    )
 
-
-# ════════════════════════════════════════
-#  API 路由
-# ════════════════════════════════════════
 
 @app.route('/api/forms')
 def api_forms():
-    """返回所有表单 JSON"""
-    forms_data = load_all_forms(FORMS_DIR)
-    return jsonify(forms_data)
+    """返回所有表单 JSON。"""
+    return jsonify(load_all_forms(FORMS_DIR))
 
 
 @app.route('/api/test-connection')
 def api_test_connection():
-    """测试数据库连接"""
+    """使用独立连接测试数据库连通性。"""
     try:
-        db_manager.load_config()
-        ok, msg = db_manager.test_connection()
-        return jsonify({'success': ok, 'message': msg})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)})
+        ok, _ = DBManager().test_connection()
+        message = '数据服务连接正常' if ok else '数据服务连接异常，请稍后重试。'
+        return jsonify({'success': ok, 'message': message})
+    except Exception as exc:
+        logger.exception('数据库连接测试失败')
+        return jsonify({'success': False, 'message': '数据服务连接异常，请稍后重试。'})
 
 
 @app.route('/api/query', methods=['POST'])
 def api_query():
-    """执行查询"""
-    data = request.get_json()
+    """执行受超时与行数限制保护的查询。"""
+    data = request.get_json(silent=True)
     if not data:
-        return jsonify({'error': '请求数据为空'}), 400
+        return error_response('请求信息不完整，请重新操作。', 400)
 
-    file_path = unquote(data.get('file_path', ''))  # 解码 %23 → #
-    params = data.get('params', {})
-
-    # 解析表单
-    abs_path = os.path.join(BASE_DIR, file_path)
-    if not os.path.isfile(abs_path):
-        return jsonify({'error': '表单文件不存在: ' + file_path}), 404
+    file_path = data.get('file_path', '')
+    params = data.get('params') or {}
+    if not isinstance(params, dict):
+        return error_response('查询条件格式不正确，请重新操作。', 400)
 
     try:
-        form = FormParser.parse_file(abs_path)
-    except Exception as e:
-        return jsonify({'error': '表单解析失败: {}'.format(e)}), 500
+        form, decoded_path, _ = get_form_from_path(file_path)
+    except Exception as exc:
+        logger.exception('表单解析失败: %s', file_path)
+        return error_response('查询配置加载失败，请联系管理员。', 500)
+    if form is None:
+        return error_response('查询方案不存在或已停用。', 404)
 
-    # 构建 SQL
     try:
         sql = build_final_sql(form, params)
-    except Exception as e:
-        return jsonify({'error': 'SQL 构建失败: {}'.format(e)}), 500
+    except Exception as exc:
+        logger.exception('查询条件处理失败: %s', decoded_path)
+        return error_response('查询条件处理失败，请联系管理员。', 500)
 
-    # 安全检查
-    ok, reason = FormParser.is_safe_sql(sql, form.query_type)
-    if not ok:
-        return jsonify({'error': 'SQL 安全检查未通过: {}'.format(reason)}), 400
+    # 现有安全检查不可删除、不可削弱。
+    safe, reason = FormParser.is_safe_sql(sql, form.query_type)
+    if not safe:
+        logger.warning('查询配置未通过安全检查: %s; 原因: %s', decoded_path, reason)
+        return error_response('当前查询配置无法执行，请联系管理员。', 400)
 
-    # 执行查询（线程池 + 锁）
-    start_time = time.time()
+    db_manager = DBManager()
+    web_config = db_manager.get_web_config()
+    started_at = time.monotonic()
     try:
-        with db_lock:
-            db_manager.load_config()
-            columns, rows = db_manager.execute_query(sql)
-        elapsed = time.time() - start_time
-    except Exception as e:
-        return jsonify({'error': '查询执行失败: {}'.format(e)}), 500
+        columns, rows, truncated = db_manager.execute_query_limited(
+            sql,
+            query_timeout=web_config['query_timeout'],
+            max_rows=web_config['max_rows']
+        )
+    except QueryTimeoutError:
+        return error_response(
+            '查询超时，请缩小查询范围或增加查询条件。', 408, 'timeout'
+        )
+    except Exception as exc:
+        logger.exception('查询执行失败: %s', decoded_path)
+        return error_response('数据服务暂时不可用，请稍后重试。', 500)
 
-    # 序列化结果（处理 datetime 等类型）
-    safe_rows = []
-    for row in rows:
-        safe_row = []
-        for val in row:
-            if isinstance(val, (datetime.datetime, datetime.date)):
-                safe_row.append(str(val))
-            elif isinstance(val, bytes):
-                safe_row.append(val.decode('utf-8', errors='replace'))
-            else:
-                safe_row.append(val)
-        safe_rows.append(safe_row)
-
+    safe_rows = normalize_rows(rows)
     return jsonify({
         'columns': columns,
         'rows': safe_rows,
-        'elapsed': round(elapsed, 2),
+        'elapsed': round(time.monotonic() - started_at, 2),
         'row_count': len(safe_rows),
         'col_count': len(columns),
+        'truncated': truncated,
+        'max_rows': web_config['max_rows'],
     })
 
 
 @app.route('/api/export', methods=['POST'])
 def api_export():
-    """导出 Excel"""
-    data = request.get_json()
+    """将当前页查询结果导出为带元信息的 Excel 文件。"""
+    data = request.get_json(silent=True)
     if not data:
-        return jsonify({'error': '请求数据为空'}), 400
+        return error_response('请求信息不完整，请重新操作。', 400)
 
-    file_path = unquote(data.get('file_path', ''))  # 解码 %23 → #
-    params = data.get('params', {})
-    columns = data.get('columns', [])
-    rows = data.get('rows', [])
-
+    file_path = data.get('file_path', '')
+    params = data.get('params') or {}
+    columns = data.get('columns') or []
+    rows = data.get('rows') or []
     if not columns:
-        return jsonify({'error': '没有可导出的数据'}), 400
+        return error_response('暂无可导出的查询结果。', 400)
+    if not isinstance(params, dict) or not isinstance(rows, list):
+        return error_response('导出信息不完整，请重新操作。', 400)
 
-    # 解析表单信息
-    abs_path = os.path.join(BASE_DIR, file_path)
     form_title = ''
     form_desc = ''
     params_info = []
     final_sql = ''
     elapsed = data.get('elapsed', 0.0)
 
-    if os.path.isfile(abs_path):
-        try:
-            form = FormParser.parse_file(abs_path)
+    try:
+        form, _, _ = get_form_from_path(file_path)
+        if form is not None:
             form_title = form.title
             form_desc = form.description
             final_sql = build_final_sql(form, params)
-            for p in form.params:
-                params_info.append((p.label, params.get(p.name, '')))
-        except Exception:
-            pass
+            params_info = [
+                (param.label, params.get(param.name, ''))
+                for param in form.params
+            ]
+    except Exception:
+        logger.warning('导出时无法读取表单元信息: %s', file_path, exc_info=True)
 
-    # 生成文件名
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = u"{}_{}.xlsx".format(form_title or 'export', timestamp)
-    export_path = os.path.join(BASE_DIR, 'temp_' + filename)
+    filename = '{}_{}.xlsx'.format(form_title or 'export', timestamp)
+    file_descriptor, export_path = tempfile.mkstemp(prefix='dbquery_', suffix='.xlsx')
+    os.close(file_descriptor)
 
     try:
         export_to_excel(
             export_path, columns, rows,
             form_title, form_desc, elapsed, params_info, final_sql
         )
-        return send_file(
+        response = send_file(
             export_path,
             as_attachment=True,
             download_name=filename,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         )
-    except Exception as e:
-        return jsonify({'error': '导出失败: {}'.format(e)}), 500
-    finally:
-        # 延迟清理临时文件
+        return response
+    except Exception as exc:
+        logger.exception('Excel 导出失败')
         try:
-            if os.path.exists(export_path):
-                threading.Timer(30, os.remove, args=[export_path]).start()
-        except Exception:
+            os.remove(export_path)
+        except OSError:
             pass
+        return error_response('导出失败，请稍后重试。', 500)
+    finally:
+        # send_file 返回后仍需要文件；延迟清理避免 Windows 文件锁冲突。
+        threading.Timer(30, _remove_file_quietly, args=[export_path]).start()
 
 
-# ════════════════════════════════════════
-#  入口
-# ════════════════════════════════════════
+def _remove_file_quietly(file_path):
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
+
 
 def get_local_ip():
-    """获取本机局域网 IP"""
+    """获取本机局域网 IP。"""
     import socket
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(('8.8.8.8', 80))
+        ip = sock.getsockname()[0]
+        sock.close()
         return ip
     except Exception:
         return '127.0.0.1'
 
+
 if __name__ == '__main__':
     local_ip = get_local_ip()
-    logger.info("=" * 50)
-    logger.info("DBQuery Web Server starting...")
-    logger.info("Forms directory: %s", FORMS_DIR)
-    logger.info("Local Access:  http://localhost:5000")
-    logger.info("Network Access: http://%s:5000", local_ip)
-    logger.info("=" * 50)
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    logger.info('=' * 50)
+    logger.info('DBQuery Web Server starting...')
+    logger.info('Forms directory: %s', FORMS_DIR)
+    logger.info('Local Access: http://localhost:8094')
+    logger.info('Network Access: http://%s:8094', local_ip)
+    logger.info('=' * 50)
+    app.run(host='0.0.0.0', port=8094, debug=False, threaded=True)

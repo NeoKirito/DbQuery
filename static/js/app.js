@@ -1,101 +1,122 @@
-/**
- * DBQuery Web 版前端逻辑
- */
+/* DBQuery Web 前端交互：嵌入状态、查询与导出。 */
 var lastQueryResult = null;
 var dataTable = null;
 
-// ════════════════════════════════════════
-//  初始化
-// ════════════════════════════════════════
 $(document).ready(function () {
-    // 日期默认值
-    $('.param-input[type="date"]').each(function () {
-        if (!$(this).val()) $(this).val(todayStr());
-    });
-    $('.param-input[type="datetime-local"]').each(function () {
-        if (!$(this).val()) $(this).val(nowStr());
-    });
-
-    // 加载侧边栏
+    initializeDefaultValues();
+    restoreSidebarState();
     loadFormTree();
 
-    // 回车执行
-    $(document).on('keydown', '.param-input', function (e) {
-        if (e.key === 'Enter') executeQuery();
+    $(document).on('keydown', '.param-input', function (event) {
+        if (event.key === 'Enter' && !$(this).is('textarea')) {
+            event.preventDefault();
+            executeQuery();
+        }
     });
 });
 
-// ════════════════════════════════════════
-//  侧边栏
-// ════════════════════════════════════════
+function isEmbedMode() {
+    return $('body').attr('data-embed-mode') === '1';
+}
+
+function isSidebarHidden() {
+    return $('body').attr('data-sidebar-hidden') === '1';
+}
+
+function preserveEmbedParams(url) {
+    var target = new URL(url, window.location.origin);
+    var current = new URLSearchParams(window.location.search);
+    ['hide_header', 'embed', 'sidebar'].forEach(function (key) {
+        if (current.get(key) === '1' || (key === 'sidebar' && current.get(key) === '0')) {
+            target.searchParams.set(key, current.get(key));
+        }
+    });
+    return target.pathname + (target.search ? target.search : '') + target.hash;
+}
+
+function initializeDefaultValues() {
+    $('.param-input[type="date"]').each(function () {
+        var $input = $(this);
+        if (!$input.val() && $input.data('default') === '{today}') {
+            $input.val(todayStr());
+        }
+    });
+    $('.param-input[type="datetime-local"]').each(function () {
+        var $input = $(this);
+        if (!$input.val() && $input.data('default') === '{today}') {
+            $input.val(nowStr());
+        }
+    });
+}
+
 function loadFormTree() {
     var $tree = $('#form-tree');
     if (!$tree.length) return;
 
-    // 如果已有静态内容（首页），需要修复链接中的 # 编码
     if ($tree.children().length > 0) {
         fixFormLinks();
         highlightCurrentForm();
         return;
     }
 
-    // 查询页：AJAX 加载
     $.get('/api/forms', function (data) {
         var html = '';
         for (var group in data) {
+            if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
             var forms = data[group];
             html += '<div class="nav-group">';
-            html += '<div class="nav-group-title" onclick="toggleGroup(this)">';
-            html += '<span class="arrow">▾</span> ' + esc(group);
-            html += ' <span class="count">' + forms.length + '</span>';
-            html += '</div><div class="nav-group-items">';
-            for (var i = 0; i < forms.length; i++) {
-                var f = forms[i];
-                var url = '/query/' + encodeFilePath(f.file_path);
-                html += '<a href="' + url + '" class="nav-item-link" data-title="' + esc(f.title.toLowerCase()) + '">';
-                html += '📄 ' + esc(f.title);
-                if (f.description) html += '<span class="nav-item-desc">' + esc(f.description) + '</span>';
+            html += '<button class="nav-group-title" type="button" onclick="toggleGroup(this)">';
+            html += '<span class="arrow" aria-hidden="true">▾</span><span>' + esc(group) + '</span>';
+            html += '<span class="count">' + forms.length + '</span></button>';
+            html += '<div class="nav-group-items">';
+            for (var index = 0; index < forms.length; index++) {
+                var form = forms[index];
+                var url = preserveEmbedParams('/query/' + encodeFilePath(form.file_path));
+                html += '<a href="' + esc(url) + '" class="nav-item-link" data-title="' + esc(form.title.toLowerCase()) + '">';
+                html += svgIcon('document', 'nav-item-icon') + '<span>' + esc(form.title) + '</span>';
+                if (form.description) html += '<span class="nav-item-desc">' + esc(form.description) + '</span>';
                 html += '</a>';
             }
             html += '</div></div>';
         }
         $tree.html(html);
         highlightCurrentForm();
+    }).fail(function () {
+        showToast('查询项目加载失败，请稍后刷新页面。', 'error');
     });
 }
 
-// 文件路径中的 # 需要编码为 %23，否则被浏览器当作 URL fragment
-function encodeFilePath(fp) {
-    return fp.replace(/#/g, '%23');
+function encodeFilePath(filePath) {
+    return String(filePath || '').replace(/#/g, '%23');
 }
 
-// 修复首页静态链接中的 # 问题
 function fixFormLinks() {
-    $('.nav-item-link').each(function () {
-        var href = $(this).attr('href');
-        if (href && href.indexOf('#') >= 0) {
-            $(this).attr('href', encodeFilePath(href));
-        }
+    $('.nav-item-link, .project-card').each(function () {
+        var $link = $(this);
+        var href = $link.attr('href');
+        if (!href) return;
+        $link.attr('href', preserveEmbedParams(encodeFilePath(href)));
     });
 }
 
 function highlightCurrentForm() {
-    var fp = window.DBQUERY ? window.DBQUERY.filePath : '';
-    if (!fp) return;
-    var encoded = encodeFilePath(fp);
+    var filePath = window.DBQUERY ? window.DBQUERY.filePath : '';
+    if (!filePath) return;
+    var encodedPath = encodeFilePath(filePath);
     $('.nav-item-link').each(function () {
         var href = $(this).attr('href') || '';
-        if (href.indexOf(encoded) >= 0 || href.indexOf(fp) >= 0) {
+        if (href.indexOf(encodedPath) >= 0 || href.indexOf(filePath) >= 0) {
             $(this).addClass('active');
-            $(this).closest('.nav-group-items').show()
-                .prev('.nav-group-title').removeClass('collapsed');
+            $(this).closest('.nav-group-items').show();
+            $(this).closest('.nav-group').find('.nav-group-title').first().removeClass('collapsed');
         }
     });
 }
 
-function toggleGroup(el) {
-    $(el).toggleClass('collapsed');
-    $(el).next('.nav-group-items').slideToggle(150);
+function toggleGroup(element) {
+    var $title = $(element);
+    $title.toggleClass('collapsed');
+    $title.next('.nav-group-items').toggle();
 }
 
 function filterForms() {
@@ -106,172 +127,327 @@ function filterForms() {
     });
 }
 
-// ════════════════════════════════════════
-//  连接测试
-// ════════════════════════════════════════
+function restoreSidebarState() {
+    if (isSidebarHidden() || !$('#sidebar').length) return;
+    try {
+        if (window.localStorage.getItem('dbquery-sidebar-collapsed') === '1') {
+            $('body').addClass('sidebar-collapsed');
+        }
+    } catch (ignore) {}
+}
+
+function toggleSidebar() {
+    if (isSidebarHidden() || !$('#sidebar').length) return;
+    $('body').toggleClass('sidebar-collapsed');
+    try {
+        window.localStorage.setItem(
+            'dbquery-sidebar-collapsed',
+            $('body').hasClass('sidebar-collapsed') ? '1' : '0'
+        );
+    } catch (ignore) {}
+}
+
 function testConnection() {
-    $('#conn-dot').attr('class', 'conn-dot conn-testing');
-    $('#conn-text').text('连接中…');
-    $.get('/api/test-connection', function (d) {
-        if (d.success) {
-            $('#conn-dot').attr('class', 'conn-dot conn-ok');
-            $('#conn-text').text('已连接');
+    var $dot = $('#conn-dot');
+    var $text = $('#conn-text');
+    if (!$dot.length) return;
+    $dot.attr('class', 'conn-dot conn-testing');
+    $text.text('正在检测数据服务');
+    $.get('/api/test-connection', function (data) {
+        if (data.success) {
+            $dot.attr('class', 'conn-dot conn-ok');
+            $text.text('数据服务连接正常');
         } else {
-            $('#conn-dot').attr('class', 'conn-dot conn-fail');
-            $('#conn-text').text('未连接');
-            alert('连接失败：\n\n' + d.message);
+            $dot.attr('class', 'conn-dot conn-fail');
+            $text.text('数据服务连接异常');
+            showToast(data.message || '数据服务连接异常，请稍后重试。', 'error');
         }
     }).fail(function () {
-        $('#conn-dot').attr('class', 'conn-dot conn-fail');
-        $('#conn-text').text('请求失败');
+        $dot.attr('class', 'conn-dot conn-fail');
+        $text.text('数据服务连接异常');
+        showToast('数据服务连接异常，请稍后重试。', 'error');
     });
 }
 
-// ════════════════════════════════════════
-//  查询执行
-// ════════════════════════════════════════
 function collectParams() {
-    var p = {};
+    var params = {};
     $('.param-input').each(function () {
-        var name = $(this).data('name');
-        if (name) p[name] = $(this).val() || '';
+        var $input = $(this);
+        var name = $input.data('name');
+        if (!name) return;
+        if ($input.is(':radio')) {
+            if ($input.is(':checked')) params[name] = $input.val() || '';
+        } else if ($input.is(':checkbox')) {
+            params[name] = $input.is(':checked') ? ($input.data('checked-value') || $input.val() || '1') : '';
+        } else {
+            params[name] = $input.val() || '';
+        }
     });
-    return p;
+    return params;
+}
+
+function validateRequiredParams() {
+    var valid = true;
+    $('.param-input[required]').each(function () {
+        if (!this.checkValidity()) {
+            valid = false;
+            return false;
+        }
+    });
+    if (!valid) {
+        showInlineMessage('warning', '请先填写标记为必填的查询条件。');
+    }
+    return valid;
+}
+
+function setQueryLoading(isLoading) {
+    var $button = $('#btn-execute');
+    $button.prop('disabled', isLoading);
+    $button.find('.button-text').text(isLoading ? '查询中…' : '查询');
+    $('#loading').toggleClass('d-none', !isLoading);
+    if (isLoading) $('#btn-export').prop('disabled', true);
+}
+
+function setExportLoading(isLoading) {
+    var $button = $('#btn-export');
+    $button.prop('disabled', isLoading || !lastQueryResult);
+    $button.find('.button-text').text(isLoading ? '导出中…' : '导出');
 }
 
 function executeQuery() {
-    var fp = window.DBQUERY ? window.DBQUERY.filePath : '';
-    if (!fp) return;
+    var filePath = window.DBQUERY ? window.DBQUERY.filePath : '';
+    if (!filePath || $('#btn-execute').prop('disabled')) return;
+    if (!validateRequiredParams()) return;
 
-    $('#btn-execute').prop('disabled', true);
-    $('#btn-export').prop('disabled', true);
-    $('#loading').removeClass('d-none');
+    clearInlineMessage();
+    setQueryLoading(true);
     $('#result-empty').hide();
-    $('#status-text').text('查询中…');
+    $('#status-text').text('正在查询，请稍候…');
 
     $.ajax({
         url: '/api/query',
         method: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({ file_path: fp, params: collectParams() }),
+        data: JSON.stringify({file_path: filePath, params: collectParams()}),
         success: function (data) {
             if (data.error) {
-                alert('查询错误：\n\n' + data.error);
-                $('#status-text').text('查询出错');
-                $('#result-empty').show();
-            } else {
-                renderResult(data);
-                $('#status-text').text('共 ' + data.row_count + ' 行，' + data.col_count + ' 列 | 耗时 ' + data.elapsed + 's');
-                $('#btn-export').prop('disabled', false);
-                lastQueryResult = data;
+                handleQueryFailure(data.error);
+                return;
+            }
+            lastQueryResult = data;
+            renderResult(data);
+            $('#status-text').text(querySummary(data));
+            setExportLoading(false);
+            if (data.truncated) {
+                showInlineMessage(
+                    'warning',
+                    '查询结果较多，当前显示前 ' + data.max_rows + ' 条，请适当缩小查询范围。'
+                );
             }
         },
         error: function (xhr) {
-            var msg = '请求失败';
-            try { msg = JSON.parse(xhr.responseText).error || msg; } catch (e) {}
-            alert('查询错误：\n\n' + msg);
-            $('#status-text').text('查询出错');
-            $('#result-empty').show();
+            getRequestError(xhr, '查询失败，请稍后重试。').then(handleQueryFailure);
         },
         complete: function () {
-            $('#btn-execute').prop('disabled', false);
-            $('#loading').addClass('d-none');
+            setQueryLoading(false);
         }
     });
 }
 
-// ════════════════════════════════════════
-//  结果渲染
-// ════════════════════════════════════════
+function handleQueryFailure(message) {
+    lastQueryResult = null;
+    setExportLoading(false);
+    $('#status-text').text('查询未完成');
+    $('#result-empty').text('暂无符合条件的数据').show();
+    showInlineMessage('error', message || '查询失败，请稍后重试。');
+}
+
+function querySummary(data) {
+    var summary = '共 ' + data.row_count + ' 条记录';
+    if (data.col_count) summary += ' · ' + data.col_count + ' 个字段';
+    summary += ' · 用时 ' + Number(data.elapsed || 0).toFixed(2) + ' 秒';
+    return summary;
+}
+
 function renderResult(data) {
-    if (dataTable) { dataTable.destroy(); $('#result-table').empty(); }
-
-    var thead = '<tr>';
-    for (var i = 0; i < data.columns.length; i++)
-        thead += '<th>' + esc(data.columns[i]) + '</th>';
-    thead += '</tr>';
-    $('#result-thead').html(thead);
-
-    var tbody = '';
-    for (var r = 0; r < data.rows.length; r++) {
-        tbody += '<tr>';
-        for (var c = 0; c < data.rows[r].length; c++) {
-            var v = data.rows[r][c];
-            tbody += '<td>' + (v === null || v === undefined ? '<span style="color:#bbb">NULL</span>' : esc(String(v))) + '</td>';
-        }
-        tbody += '</tr>';
+    if (dataTable) {
+        dataTable.destroy();
+        dataTable = null;
     }
-    $('#result-tbody').html(tbody);
+    $('#result-table').empty();
+
+    var head = '<tr>';
+    for (var index = 0; index < data.columns.length; index++) {
+        head += '<th>' + esc(data.columns[index]) + '</th>';
+    }
+    head += '</tr>';
+    $('#result-thead').html(head);
+
+    var body = '';
+    for (var rowIndex = 0; rowIndex < data.rows.length; rowIndex++) {
+        body += '<tr>';
+        for (var columnIndex = 0; columnIndex < data.rows[rowIndex].length; columnIndex++) {
+            var value = data.rows[rowIndex][columnIndex];
+            body += '<td>' + (
+                value === null || value === undefined
+                    ? '<span class="null-value">未填写</span>'
+                    : esc(String(value))
+            ) + '</td>';
+        }
+        body += '</tr>';
+    }
+    $('#result-tbody').html(body);
 
     dataTable = $('#result-table').DataTable({
-        paging: true, pageLength: 100,
+        paging: true,
+        pageLength: 100,
         lengthMenu: [50, 100, 200, 500, 1000],
-        ordering: true, searching: true, info: true,
-        scrollX: true, autoWidth: false,
+        ordering: true,
+        searching: true,
+        info: true,
+        scrollX: true,
+        autoWidth: false,
         language: {
-            search: "过滤:", lengthMenu: "每页 _MENU_ 行",
-            info: "第 _START_ - _END_ 行，共 _TOTAL_ 行",
-            infoEmpty: "", infoFiltered: "(从 _MAX_ 行筛选)",
-            paginate: { first: "首页", last: "末页", previous: "‹", next: "›" },
-            zeroRecords: "无匹配记录"
+            search: '筛选：',
+            lengthMenu: '每页显示 _MENU_ 条',
+            info: '显示第 _START_ 至 _END_ 条，共 _TOTAL_ 条',
+            infoEmpty: '暂无符合条件的数据',
+            infoFiltered: '（从 _MAX_ 条记录中筛选）',
+            paginate: {first: '首页', last: '末页', previous: '上一页', next: '下一页'},
+            zeroRecords: '暂无符合条件的数据'
         }
     });
-    $('#result-empty').hide();
+    if (data.row_count) {
+        $('#result-empty').hide();
+    } else {
+        $('#result-empty').text('暂无符合条件的数据').show();
+    }
 }
 
-// ════════════════════════════════════════
-//  Excel 导出
-// ════════════════════════════════════════
 function exportExcel() {
-    if (!lastQueryResult) return;
-    var fp = window.DBQUERY ? window.DBQUERY.filePath : '';
-
-    $('#btn-export').prop('disabled', true);
-    $('#status-text').text('正在导出…');
+    if (!lastQueryResult || $('#btn-export').prop('disabled')) return;
+    var filePath = window.DBQUERY ? window.DBQUERY.filePath : '';
+    setExportLoading(true);
+    $('#status-text').text('正在生成导出文件…');
 
     $.ajax({
-        url: '/api/export', method: 'POST',
+        url: '/api/export',
+        method: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({
-            file_path: fp, params: collectParams(),
-            columns: lastQueryResult.columns, rows: lastQueryResult.rows,
+            file_path: filePath,
+            params: collectParams(),
+            columns: lastQueryResult.columns,
+            rows: lastQueryResult.rows,
             elapsed: lastQueryResult.elapsed
         }),
-        xhrFields: { responseType: 'blob' },
-        success: function (blob) {
+        xhrFields: {responseType: 'blob'},
+        success: function (blob, status, xhr) {
             var url = URL.createObjectURL(blob);
-            var a = document.createElement('a');
-            a.href = url; a.download = 'export.xlsx';
-            document.body.appendChild(a); a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            $('#status-text').text('导出完成');
+            var link = document.createElement('a');
+            link.href = url;
+            link.download = extractDownloadFileName(xhr) || '查询结果.xlsx';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+            $('#status-text').text('导出文件已生成，正在下载。');
+            showToast('导出文件已生成，正在下载。', 'success');
         },
         error: function (xhr) {
-            var msg = '导出失败';
-            try {
-                var r = new FileReader();
-                r.onload = function () { try { msg = JSON.parse(r.result).error || msg; } catch(e){} alert('导出错误：\n\n' + msg); };
-                r.readAsText(xhr.response || xhr.responseText); return;
-            } catch(e) {}
-            alert('导出错误：\n\n' + msg);
+            getRequestError(xhr, '导出失败，请稍后重试。').then(function (message) {
+                $('#status-text').text('导出未完成');
+                showInlineMessage('error', message);
+            });
         },
-        complete: function () { $('#btn-export').prop('disabled', false); }
+        complete: function () {
+            setExportLoading(false);
+        }
     });
 }
 
-// ════════════════════════════════════════
-//  工具函数
-// ════════════════════════════════════════
-function esc(s) {
-    if (!s) return '';
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-            .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+function getRequestError(xhr, fallback) {
+    return new Promise(function (resolve) {
+        var response = xhr && xhr.response;
+        if (response instanceof Blob) {
+            var reader = new FileReader();
+            reader.onload = function () {
+                try {
+                    var data = JSON.parse(reader.result);
+                    resolve(data.error || fallback);
+                } catch (ignore) {
+                    resolve(fallback);
+                }
+            };
+            reader.onerror = function () { resolve(fallback); };
+            reader.readAsText(response);
+            return;
+        }
+        try {
+            var payload = typeof response === 'string' ? JSON.parse(response) : response;
+            resolve((payload && payload.error) || fallback);
+        } catch (ignore) {
+            resolve(fallback);
+        }
+    });
 }
+
+function extractDownloadFileName(xhr) {
+    var disposition = xhr.getResponseHeader('Content-Disposition') || '';
+    var utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8Match && utf8Match[1]) {
+        try { return decodeURIComponent(utf8Match[1]); } catch (ignore) {}
+    }
+    var filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    return filenameMatch && filenameMatch[1] ? filenameMatch[1] : '';
+}
+
+function showInlineMessage(type, message) {
+    var $message = $('#result-message');
+    if (!$message.length) {
+        showToast(message, type);
+        return;
+    }
+    $message.removeClass('d-none message-warning message-error message-success')
+        .addClass('message-' + type)
+        .text(message);
+}
+
+function clearInlineMessage() {
+    $('#result-message').addClass('d-none').removeClass('message-warning message-error message-success').text('');
+}
+
+function showToast(message, type) {
+    var $region = $('#toast-region');
+    if (!$region.length || !message) return;
+    var $toast = $('<div class="app-toast" role="status"></div>').addClass('toast-' + (type || 'info'));
+    $toast.append($('<span></span>').text(message));
+    $region.append($toast);
+    window.setTimeout(function () {
+        $toast.addClass('toast-leaving');
+        window.setTimeout(function () { $toast.remove(); }, 180);
+    }, 3500);
+}
+
+function svgIcon(name, extraClass) {
+    var cssClass = 'icon ' + (extraClass || '');
+    if (name === 'document') {
+        return '<svg class="' + cssClass + '" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>';
+    }
+    return '';
+}
+
+function esc(value) {
+    return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function todayStr() {
-    var d = new Date();
-    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    var date = new Date();
+    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
 }
+
 function nowStr() {
-    return todayStr() + 'T' + String(new Date().getHours()).padStart(2,'0') + ':' + String(new Date().getMinutes()).padStart(2,'0');
+    var date = new Date();
+    return todayStr() + 'T' + String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
 }

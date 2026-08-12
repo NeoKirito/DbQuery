@@ -2,7 +2,7 @@
 """
 DBQuery 统一入口
   双击或 DBQuery.exe          → 桌面版
-  DBQuery.exe --web           → Web 版（http://localhost:5000）
+  DBQuery.exe --web           → Web 版（http://localhost:8094）
   DBQuery.exe --web --port 80 → Web 版指定端口
 """
 import sys
@@ -24,7 +24,7 @@ def run_desktop():
     main()
 
 
-def run_web(port=5000):
+def run_web(port=8094):
     """启动 Web 版"""
     from web_server import app, logger, get_local_ip
     local_ip = get_local_ip()
@@ -48,13 +48,13 @@ def main():
         print()
         print("用法：")
         print("  DBQuery.exe              启动桌面版（默认）")
-        print("  DBQuery.exe --web        启动 Web 版（http://localhost:5000）")
+        print("  DBQuery.exe --web        启动 Web 版（http://localhost:8094）")
         print("  DBQuery.exe --web --port 8080  指定端口")
         print("  DBQuery.exe --help       显示帮助")
         return
 
     if '--web' in args:
-        port = 5000
+        port = 8094
         if '--port' in args:
             try:
                 idx = args.index('--port')

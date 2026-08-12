@@ -234,6 +234,9 @@ def serialize_form(form, base_dir=None):
                 'ptype':   p.ptype,
                 'options': p.options,
                 'default': p.default,
+                'placeholder': p.placeholder,
+                'required': p.required,
+                'width': p.width,
             }
             for p in form.params
         ],

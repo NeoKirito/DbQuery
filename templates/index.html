@@ -1,23 +1,32 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="app-layout">
-    <!-- 左侧边栏 -->
-    <div class="app-sidebar" id="sidebar">
-        <div class="sidebar-title">📋 表单列表</div>
-        <input type="text" class="sidebar-search" id="form-search"
-               placeholder="搜索表单…" oninput="filterForms()">
+<div class="app-layout{% if sidebar_hidden %} no-sidebar{% endif %}">
+    {% if not sidebar_hidden %}
+    <aside class="app-sidebar" id="sidebar" aria-label="查询项目">
+        <div class="sidebar-heading">
+            <div class="sidebar-title">
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                <span class="sidebar-title-text">查询项目</span>
+            </div>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="收起查询项目" title="收起查询项目">
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+        </div>
+        <label class="visually-hidden" for="form-search">筛选查询项目</label>
+        <input type="text" class="sidebar-search" id="form-search" placeholder="筛选查询项目" oninput="filterForms()">
         <div class="sidebar-list" id="form-tree">
             {% for group, forms in forms_data.items() %}
             <div class="nav-group">
                 <div class="nav-group-title" onclick="toggleGroup(this)">
-                    <span class="arrow">▾</span> {{ group }}
+                    <span class="arrow" aria-hidden="true">▾</span><span>{{ group }}</span>
                     <span class="count">{{ forms|length }}</span>
                 </div>
                 <div class="nav-group-items">
                     {% for form in forms %}
-                    <a href="/query/{{ form.file_path|replace('#', '%23') }}" class="nav-item-link" data-title="{{ form.title|lower }}">
-                        📄 {{ form.title }}
+                    <a href="/query/{{ form.file_path|replace('#', '%23') }}" class="nav-item-link{% if form.description %} has-desc{% endif %}" data-title="{{ form.title|lower }}">
+                        <svg class="icon nav-item-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                        <span>{{ form.title }}</span>
                         {% if form.description %}<span class="nav-item-desc">{{ form.description }}</span>{% endif %}
                     </a>
                     {% endfor %}
@@ -25,32 +34,39 @@
             </div>
             {% endfor %}
         </div>
-    </div>
+    </aside>
+    {% endif %}
 
-    <!-- 右侧主区 -->
-    <div class="app-main">
-        <div class="welcome-panel">
-            <div class="welcome-icon">📊</div>
-            <h3>数据库查询工具</h3>
-            <p class="text-muted">← 从左侧选择一个表单开始查询</p>
-            <div class="welcome-features">
-                <div class="feature-card">
-                    <div class="feature-icon">🔍</div>
-                    <div class="feature-title">灵活查询</div>
-                    <div class="feature-desc">文本、日期、数字、下拉等多种参数</div>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">📥</div>
-                    <div class="feature-title">Excel 导出</div>
-                    <div class="feature-desc">一键导出带格式的 Excel 文件</div>
-                </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔒</div>
-                    <div class="feature-title">安全可靠</div>
-                    <div class="feature-desc">仅允许查询，禁止危险操作</div>
-                </div>
+    <section class="app-main project-home">
+        <header class="page-header">
+            <div>
+                <h1 class="page-title">综合查询</h1>
+                <p class="page-desc">请选择查询项目</p>
             </div>
-        </div>
-    </div>
+        </header>
+        {% if sidebar_hidden %}
+        <section class="business-section project-list-section" aria-labelledby="project-list-heading">
+            <div class="section-heading" id="project-list-heading">查询项目</div>
+            <div class="project-list">
+                {% for group, forms in forms_data.items() %}
+                <div class="project-group">
+                    <div class="project-group-title">{{ group }}</div>
+                    {% for form in forms %}
+                    <a class="project-card" href="/query/{{ form.file_path|replace('#', '%23') }}">
+                        <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                        <span>
+                            <strong>{{ form.title }}</strong>
+                            {% if form.description %}<small>{{ form.description }}</small>{% endif %}
+                        </span>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% else %}
+        <div class="compact-empty-state">请选择左侧的查询项目。</div>
+        {% endif %}
+    </section>
 </div>
 {% endblock %}

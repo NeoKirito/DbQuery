@@ -1,30 +1,36 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}数据库查询工具{% endblock %}</title>
+    <title>{% block title %}综合查询{% endblock %}</title>
     <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
     <link href="/static/vendor/dataTables.bootstrap5.min.css" rel="stylesheet">
     <link href="/static/css/style.css" rel="stylesheet">
     {% block head %}{% endblock %}
 </head>
-<body>
+<body class="{% if embed_mode %}embed-mode{% else %}standalone-mode{% endif %}{% if sidebar_hidden %} sidebar-hidden-mode{% endif %}"
+      data-embed-mode="{{ '1' if embed_mode else '0' }}"
+      data-sidebar-hidden="{{ '1' if sidebar_hidden else '0' }}">
     {% if not hide_header %}
-    <nav class="navbar navbar-expand-lg navbar-dark app-navbar">
+    <nav class="navbar navbar-expand-lg navbar-dark app-navbar" aria-label="综合查询导航">
         <div class="container-fluid">
-            <a class="navbar-brand app-brand" href="/">📊 数据库查询工具</a>
+            <a class="navbar-brand app-brand" href="/">
+                <svg class="icon icon-brand" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 19V9m5 10V5m5 14v-8m5 8V3"/><path d="M2 20h20"/></svg>
+                <span>综合查询</span>
+            </a>
             <div class="d-flex align-items-center">
                 <span id="conn-dot" class="conn-dot conn-unknown"></span>
-                <span id="conn-text" class="conn-label">未测试</span>
-                <button class="btn btn-nav ms-2" onclick="testConnection()">测试连接</button>
+                <span id="conn-text" class="conn-label">数据服务状态未知</span>
+                <button class="btn btn-nav ms-2" type="button" onclick="testConnection()">检测数据服务</button>
             </div>
         </div>
     </nav>
     {% endif %}
-    <div class="app-body">
+    <main class="app-body" aria-label="综合查询内容区">
         {% block content %}{% endblock %}
-    </div>
+    </main>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
     <script src="/static/vendor/jquery.min.js"></script>
     <script src="/static/vendor/bootstrap.bundle.min.js"></script>
     <script src="/static/vendor/jquery.dataTables.min.js"></script>

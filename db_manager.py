@@ -1,15 +1,15 @@
-# -*- coding: utf-8 -*-
 """
-数据库连接管理模块
-支持 SQL Server，通过 pyodbc 连接
-Win7 兼容：自动探测最优 ODBC 驱动
+数据库连接管理模块。
+
+支持 SQL Server，通过 pyodbc 连接。Web 请求使用短生命周期连接，避免共享
+连接和全局锁导致的串行阻塞；桌面端仍可使用 execute_query 兼容接口。
 """
-import pyodbc
 import configparser
+import logging
 import os
 import sys
-import logging
-import traceback
+
+import pyodbc
 
 logger = logging.getLogger('DBQuery.db_manager')
 
@@ -30,7 +30,11 @@ DEFAULT_DB_CONFIG = {
     'password': ''
 }
 
-# 驱动优先级（高版本优先，Win7/Win10/Win11 均覆盖）
+DEFAULT_WEB_CONFIG = {
+    'query_timeout': 60,
+    'max_rows': 5000,
+}
+
 _DRIVER_PRIORITY = [
     'ODBC Driver 18 for SQL Server',
     'ODBC Driver 17 for SQL Server',
@@ -43,11 +47,31 @@ _DRIVER_PRIORITY = [
 ]
 
 
+class QueryTimeoutError(RuntimeError):
+    """数据库驱动报告查询超时时抛出。"""
+
+
 class DBManager:
+    """数据库配置与短生命周期查询连接管理器。"""
+
     def __init__(self):
+        # 保留该属性以兼容旧版调用方；Web 查询不再复用它。
         self.connection = None
         self.config = configparser.ConfigParser()
         self.load_config()
+
+    @staticmethod
+    def _positive_int(value, default, maximum=None):
+        """读取正整数配置，异常、空值或越界时回退默认值。"""
+        try:
+            parsed = int(str(value).strip())
+        except (TypeError, ValueError):
+            return default
+        if parsed <= 0:
+            return default
+        if maximum is not None:
+            return min(parsed, maximum)
+        return parsed
 
     def load_config(self):
         self.config = configparser.ConfigParser()
@@ -58,17 +82,28 @@ class DBManager:
             defaults['driver'] = DBManager.get_best_driver()
             self.config['database'] = defaults
             self.save_config()
-        else:
-            if not self.config['database'].get('driver', '').strip():
-                self.config['database']['driver'] = DBManager.get_best_driver()
-                self.save_config()
+        elif not self.config['database'].get('driver', '').strip():
+            self.config['database']['driver'] = DBManager.get_best_driver()
+            self.save_config()
 
     def save_config(self):
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            self.config.write(f)
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as config_file:
+            self.config.write(config_file)
 
     def get_db_config(self):
         return dict(self.config['database'])
+
+    def get_web_config(self):
+        """返回 Web 查询配置；旧配置文件缺少 [web] 时使用安全默认值。"""
+        section = self.config['web'] if self.config.has_section('web') else {}
+        return {
+            'query_timeout': self._positive_int(
+                section.get('query_timeout'), DEFAULT_WEB_CONFIG['query_timeout'], maximum=3600
+            ),
+            'max_rows': self._positive_int(
+                section.get('max_rows'), DEFAULT_WEB_CONFIG['max_rows'], maximum=100000
+            ),
+        }
 
     def set_db_config(self, cfg_dict):
         self.config['database'] = cfg_dict
@@ -77,87 +112,161 @@ class DBManager:
 
     def _build_conn_str(self):
         db = self.config['database']
-        driver   = db.get('driver', '') or DBManager.get_best_driver()
-        server   = db.get('server', 'localhost')
-        port     = db.get('port', '1433').strip()
+        driver = db.get('driver', '') or DBManager.get_best_driver()
+        server = db.get('server', 'localhost')
+        port = db.get('port', '1433').strip()
         database = db.get('database', 'master')
-        trusted  = db.get('trusted_connection', 'no').lower() in ('yes', '1', 'true')
+        trusted = db.get('trusted_connection', 'no').lower() in ('yes', '1', 'true')
         server_str = '{},{}'.format(server, port) if port and port != '1433' else server
         if trusted:
-            return ("DRIVER={{{}}};SERVER={};DATABASE={};Trusted_Connection=yes;"
-                    .format(driver, server_str, database))
-        else:
-            username = db.get('username', '')
-            password = db.get('password', '')
-            return ("DRIVER={{{}}};SERVER={};DATABASE={};UID={};PWD={};"
-                    .format(driver, server_str, database, username, password))
+            return (
+                'DRIVER={{{}}};SERVER={};DATABASE={};Trusted_Connection=yes;'
+                .format(driver, server_str, database)
+            )
+        username = db.get('username', '')
+        password = db.get('password', '')
+        return (
+            'DRIVER={{{}}};SERVER={};DATABASE={};UID={};PWD={};'
+            .format(driver, server_str, database, username, password)
+        )
+
+    def _open_connection(self, connect_timeout=15):
+        """创建一条独立连接；调用者必须负责关闭。"""
+        return pyodbc.connect(
+            self._build_conn_str(),
+            timeout=self._positive_int(connect_timeout, 15, maximum=120)
+        )
 
     def test_connection(self):
         try:
-            conn_str = self._build_conn_str()
-            conn = pyodbc.connect(conn_str, timeout=10)
+            conn = self._open_connection(connect_timeout=10)
             conn.close()
-            return True, u"连接成功"
-        except Exception as e:
-            return False, str(e)
+            return True, '连接成功'
+        except Exception as exc:
+            return False, str(exc)
 
-    def _ensure_connection(self):
-        if self.connection is None:
-            conn_str = self._build_conn_str()
-            self.connection = pyodbc.connect(conn_str, timeout=15)
+    @staticmethod
+    def _is_timeout_error(exc):
+        text = str(exc).lower()
+        return 'timeout' in text or 'hyt00' in text or 'hyt01' in text
 
-    def validate_connection(self):
-        """检查已有连接是否仍然可用"""
-        if self.connection is None:
-            return False
+    @staticmethod
+    def _close_quietly(resource):
+        if resource is None:
+            return
         try:
-            cursor = self.connection.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-            return True
+            resource.close()
         except Exception:
-            self.connection = None
-            return False
+            pass
 
-    def _run_query(self, sql):
-        cursor = self.connection.cursor()
-        logger.debug("Executing SQL: %s", sql[:200] if sql else "EMPTY")
-        cursor.execute(sql)
-        if cursor.description is None:
-            return [], []
-        columns = [desc[0] for desc in cursor.description]
-        rows = [list(row) for row in cursor.fetchall()]
-        logger.info("Query success: %d columns, %d rows", len(columns), len(rows))
-        return columns, rows
+    def _run_limited_query(self, conn, sql, query_timeout, max_rows):
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            # pyodbc 的 cursor.timeout 是执行 SQL 的查询超时，不是连接超时。
+            cursor.timeout = query_timeout
+            logger.debug('Executing SQL: %s', sql[:200] if sql else 'EMPTY')
+            cursor.execute(sql)
+            if cursor.description is None:
+                return [], [], False
+
+            columns = [desc[0] for desc in cursor.description]
+            fetched = cursor.fetchmany(max_rows + 1)
+            truncated = len(fetched) > max_rows
+            rows = [list(row) for row in fetched[:max_rows]]
+            logger.info(
+                'Query success: %d columns, %d rows%s',
+                len(columns), len(rows), ' (truncated)' if truncated else ''
+            )
+            return columns, rows, truncated
+        finally:
+            self._close_quietly(cursor)
+
+    def execute_query_limited(self, sql, query_timeout=None, max_rows=None):
+        """执行一次查询，最多读取 max_rows + 1 行以识别截断。
+
+        每次调用都建立并关闭独立连接。除明确的超时外，驱动异常会以新连接重试一次，
+        用于覆盖短暂网络中断；连接、游标在任意路径都会关闭。
+        """
+        web_config = self.get_web_config()
+        query_timeout = self._positive_int(
+            query_timeout, web_config['query_timeout'], maximum=3600
+        )
+        max_rows = self._positive_int(max_rows, web_config['max_rows'], maximum=100000)
+
+        last_error = None
+        for attempt in range(2):
+            conn = None
+            try:
+                conn = self._open_connection()
+                return self._run_limited_query(conn, sql, query_timeout, max_rows)
+            except pyodbc.Error as exc:
+                if self._is_timeout_error(exc):
+                    logger.warning('Query timed out after %ss: %s', query_timeout, exc)
+                    raise QueryTimeoutError('查询超时') from exc
+                last_error = exc
+                logger.warning('pyodbc error on query attempt %d/2: %s', attempt + 1, exc)
+                if attempt == 0:
+                    continue
+                raise
+            finally:
+                self._close_quietly(conn)
+
+        if last_error:
+            raise last_error
+        raise RuntimeError('查询执行失败')
+
+    def _run_unlimited_query(self, conn, sql):
+        """保留桌面端原有的完整结果读取行为。"""
+        cursor = None
+        try:
+            cursor = conn.cursor()
+            logger.debug('Executing desktop SQL: %s', sql[:200] if sql else 'EMPTY')
+            cursor.execute(sql)
+            if cursor.description is None:
+                return [], []
+            columns = [desc[0] for desc in cursor.description]
+            rows = [list(row) for row in cursor.fetchall()]
+            logger.info('Desktop query success: %d columns, %d rows', len(columns), len(rows))
+            return columns, rows
+        finally:
+            self._close_quietly(cursor)
 
     def execute_query(self, sql):
-        logger.info("execute_query called")
-        try:
-            if not self.validate_connection():
-                self._ensure_connection()
-            return self._run_query(sql)
-        except pyodbc.Error as e:
-            logger.warning("pyodbc.Error (retry): %s", str(e))
-            self.connection = None
-            self._ensure_connection()
-            return self._run_query(sql)
-        except Exception as e:
-            logger.error("execute_query error: %s", str(e))
-            logger.error(traceback.format_exc())
-            raise
+        """桌面版兼容接口，不应用 Web 端的超时与行数上限。"""
+        last_error = None
+        for attempt in range(2):
+            conn = None
+            try:
+                conn = self._open_connection()
+                return self._run_unlimited_query(conn, sql)
+            except pyodbc.Error as exc:
+                last_error = exc
+                logger.warning('pyodbc error on desktop query attempt %d/2: %s', attempt + 1, exc)
+                if attempt == 0:
+                    continue
+                raise
+            finally:
+                self._close_quietly(conn)
+        if last_error:
+            raise last_error
+        raise RuntimeError('查询执行失败')
 
     @staticmethod
     def list_drivers():
         try:
             all_drivers = pyodbc.drivers()
-            sql_drivers = [d for d in all_drivers
-                           if 'SQL Server' in d or 'sqlserver' in d.lower()]
-            def priority(d):
+            sql_drivers = [
+                driver for driver in all_drivers
+                if 'SQL Server' in driver or 'sqlserver' in driver.lower()
+            ]
+
+            def priority(driver):
                 try:
-                    return _DRIVER_PRIORITY.index(d)
+                    return _DRIVER_PRIORITY.index(driver)
                 except ValueError:
                     return len(_DRIVER_PRIORITY)
+
             return sorted(sql_drivers, key=priority)
         except Exception:
             return []

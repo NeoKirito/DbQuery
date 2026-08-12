@@ -1,90 +1,121 @@
 {% extends "base.html" %}
 
-{% block title %}{{ form.title }} - 查询{% endblock %}
+{% block title %}{{ form.title }} - 综合查询{% endblock %}
 
 {% block content %}
-<div class="app-layout">
-    <!-- 左侧边栏（AJAX 加载） -->
-    <div class="app-sidebar" id="sidebar">
-        <div class="sidebar-title">📋 表单列表</div>
-        <input type="text" class="sidebar-search" id="form-search"
-               placeholder="搜索表单…" oninput="filterForms()">
-        <div class="sidebar-list" id="form-tree"></div>
-    </div>
-
-    <!-- 右侧主区 -->
-    <div class="app-main">
-        <!-- 标题栏 -->
-        <div class="page-header">
-            <div class="d-flex align-items-center">
-                <h4 class="mb-0"><b>{{ form.title }}</b></h4>
-                {% if form.description %}
-                <span class="page-desc">{{ form.description }}</span>
-                {% endif %}
-                <span class="type-badge {{ 'exec' if form.query_type == 'exec' else 'select' }}">
-                    {{ '存储过程' if form.query_type == 'exec' else 'SELECT' }}
-                </span>
+<div class="app-layout{% if sidebar_hidden %} no-sidebar{% endif %}">
+    {% if not sidebar_hidden %}
+    <aside class="app-sidebar" id="sidebar" aria-label="查询项目">
+        <div class="sidebar-heading">
+            <div class="sidebar-title">
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                <span class="sidebar-title-text">查询项目</span>
             </div>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="收起查询项目" title="收起查询项目">
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
         </div>
+        <label class="visually-hidden" for="form-search">筛选查询项目</label>
+        <input type="text" class="sidebar-search" id="form-search" placeholder="筛选查询项目" oninput="filterForms()">
+        <div class="sidebar-list" id="form-tree"></div>
+    </aside>
+    {% endif %}
 
-        <!-- 查询条件 -->
-        {% if form.params %}
-        <div class="params-panel">
-            <div class="params-title">查询条件</div>
+    <section class="app-main">
+        <header class="page-header">
+            <div>
+                <h1 class="page-title">{{ form.title }}</h1>
+                {% if form.description %}
+                <p class="page-desc">{{ form.description }}</p>
+                {% endif %}
+            </div>
+            {% if not embed_mode %}
+            <span class="type-badge {{ 'exec' if form.query_type == 'exec' else 'select' }}">
+                {{ '存储过程' if form.query_type == 'exec' else 'SELECT' }}
+            </span>
+            {% endif %}
+        </header>
+
+        <section class="business-section conditions-section" aria-labelledby="conditions-heading">
+            <div class="section-heading" id="conditions-heading">查询条件</div>
+            {% if form.params %}
             <div class="params-grid">
                 {% for p in form.params %}
-                <div class="param-field">
-                    <label>{{ p.label }}</label>
-                    {% if p.ptype == 'date' %}
-                    <input type="date" class="param-input" data-name="{{ p.name }}"
-                           value="{{ p.default|replace('{today}', '') }}">
-                    {% elif p.ptype == 'datetime' %}
-                    <input type="datetime-local" class="param-input" data-name="{{ p.name }}">
-                    {% elif p.ptype == 'number' %}
-                    <input type="number" class="param-input" data-name="{{ p.name }}"
-                           value="{{ p.default }}" placeholder="数字">
-                    {% elif p.ptype == 'select' %}
-                    <select class="param-input" data-name="{{ p.name }}">
-                        {% for opt in p.options %}
-                        <option value="{{ opt }}" {{ 'selected' if opt == p.default else '' }}>{{ opt }}</option>
-                        {% endfor %}
-                    </select>
+                    {% if p.ptype == 'hidden' %}
+                    <input type="hidden" class="param-input" data-name="{{ p.name }}" value="{{ p.default|replace('{today}', '') }}">
                     {% else %}
-                    <input type="text" class="param-input" data-name="{{ p.name }}"
-                           value="{{ p.default|replace('{today}', '') }}" placeholder="{{ p.label }}">
+                    <div class="param-field{% if p.ptype == 'checkbox' %} checkbox-field{% endif %}"{% if p.width %} style="--param-width: {{ p.width }};"{% endif %}>
+                        <label for="param-{{ loop.index }}">{{ p.label }}{% if p.required %}<span class="required-mark" aria-label="必填">*</span>{% endif %}</label>
+                        {% if p.ptype == 'date' %}
+                        <input id="param-{{ loop.index }}" type="date" class="param-input" data-name="{{ p.name }}" data-default="{{ p.default }}" value="{{ p.default|replace('{today}', '') }}"{% if p.placeholder %} placeholder="{{ p.placeholder }}"{% endif %}{% if p.required %} required{% endif %}>
+                        {% elif p.ptype == 'datetime' %}
+                        <input id="param-{{ loop.index }}" type="datetime-local" class="param-input" data-name="{{ p.name }}" data-default="{{ p.default }}"{% if p.placeholder %} placeholder="{{ p.placeholder }}"{% endif %}{% if p.required %} required{% endif %}>
+                        {% elif p.ptype == 'number' %}
+                        <input id="param-{{ loop.index }}" type="number" class="param-input" data-name="{{ p.name }}" value="{{ p.default }}" placeholder="{{ p.placeholder or '请输入数字' }}"{% if p.required %} required{% endif %}>
+                        {% elif p.ptype == 'select' %}
+                        <select id="param-{{ loop.index }}" class="param-input" data-name="{{ p.name }}"{% if p.required %} required{% endif %}>
+                            {% for opt in p.options %}
+                            <option value="{{ opt }}" {{ 'selected' if opt == p.default else '' }}>{{ opt }}</option>
+                            {% endfor %}
+                        </select>
+                        {% elif p.ptype == 'textarea' %}
+                        <textarea id="param-{{ loop.index }}" class="param-input param-textarea" data-name="{{ p.name }}" placeholder="{{ p.placeholder or p.label }}"{% if p.required %} required{% endif %}>{{ p.default|replace('{today}', '') }}</textarea>
+                        {% elif p.ptype == 'checkbox' %}
+                        <label class="checkbox-control" for="param-{{ loop.index }}">
+                            <input id="param-{{ loop.index }}" type="checkbox" class="param-input" data-name="{{ p.name }}" data-checked-value="1" value="1" {{ 'checked' if p.default|lower in ['1', 'true', 'yes', 'on', '是'] else '' }}{% if p.required %} required{% endif %}>
+                            <span>是</span>
+                        </label>
+                        {% elif p.ptype == 'radio' %}
+                        <div class="radio-group" id="param-{{ loop.index }}">
+                            {% for opt in p.options %}
+                            <label class="radio-control">
+                                <input type="radio" class="param-input" data-name="{{ p.name }}" value="{{ opt }}" {{ 'checked' if opt == p.default else '' }}{% if p.required and loop.first %} required{% endif %}>
+                                <span>{{ opt }}</span>
+                            </label>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <input id="param-{{ loop.index }}" type="text" class="param-input" data-name="{{ p.name }}" value="{{ p.default|replace('{today}', '') }}" placeholder="{{ p.placeholder or p.label }}"{% if p.required %} required{% endif %}>
+                        {% endif %}
+                    </div>
                     {% endif %}
-                </div>
                 {% endfor %}
             </div>
-        </div>
-        {% endif %}
-
-        <!-- 操作栏 -->
-        <div class="action-bar">
-            <button class="btn-execute" id="btn-execute" onclick="executeQuery()">
-                ▶ 执行查询
-            </button>
-            <button class="btn-export" id="btn-export" onclick="exportExcel()" disabled>
-                📥 导出 Excel
-            </button>
-            <div class="spinner d-none" id="loading"></div>
-            <span class="action-status" id="status-text"></span>
-        </div>
-
-        <!-- 结果区 -->
-        <div class="result-panel">
-            <table id="result-table" class="display" style="width:100%">
-                <thead id="result-thead"></thead>
-                <tbody id="result-tbody"></tbody>
-            </table>
-            <div class="result-empty" id="result-empty">
-                执行查询后，结果将显示在这里
+            {% endif %}
+            <div class="action-bar">
+                <button class="btn btn-primary-action" id="btn-execute" type="button" onclick="executeQuery()">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                    <span class="button-text">查询</span>
+                </button>
+                <button class="btn btn-secondary-action" id="btn-export" type="button" onclick="exportExcel()" disabled>
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14v5h14v-5"/></svg>
+                    <span class="button-text">导出</span>
+                </button>
+                <span class="spinner d-none" id="loading" aria-label="正在查询"></span>
+                <span class="action-status" id="status-text" aria-live="polite"></span>
             </div>
-        </div>
-    </div>
+        </section>
+
+        <section class="business-section result-section" aria-labelledby="result-heading">
+            <div class="section-heading result-heading" id="result-heading">查询结果</div>
+            <div id="result-message" class="inline-message d-none" role="status"></div>
+            <div class="result-panel">
+                <table id="result-table" class="display" style="width:100%">
+                    <thead id="result-thead"></thead>
+                    <tbody id="result-tbody"></tbody>
+                </table>
+                <div class="result-empty" id="result-empty">设置查询条件后点击“查询”</div>
+            </div>
+        </section>
+    </section>
 </div>
 
 <script>
-    window.DBQUERY = { filePath: "{{ file_path|replace('#', '%23') }}", formParams: {{ form.params | tojson }} };
+    window.DBQUERY = {
+        filePath: "{{ file_path|replace('#', '%23') }}",
+        formParams: {{ form.params | tojson }},
+        embedMode: {{ 'true' if embed_mode else 'false' }},
+        sidebarHidden: {{ 'true' if sidebar_hidden else 'false' }}
+    };
 </script>
 {% endblock %}
