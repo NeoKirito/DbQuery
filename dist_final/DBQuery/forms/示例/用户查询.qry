@@ -1,0 +1,14 @@
+[meta]
+title = 用户查询
+group = 示例
+description = 按关键字、部门、状态查询用户信息
+
+[params]
+keyword    = 姓名/账号关键字 | text
+department = 部门           | text
+status     = 状态           | select:全部,启用,禁用 | 全部
+
+[sql]
+select top 200 
+*
+from pe_tjdj 

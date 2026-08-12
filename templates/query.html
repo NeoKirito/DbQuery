@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+
+{% block title %}{{ form.title }} - 查询{% endblock %}
+
+{% block content %}
+<div class="app-layout">
+    <!-- 左侧边栏（AJAX 加载） -->
+    <div class="app-sidebar" id="sidebar">
+        <div class="sidebar-title">📋 表单列表</div>
+        <input type="text" class="sidebar-search" id="form-search"
+               placeholder="搜索表单…" oninput="filterForms()">
+        <div class="sidebar-list" id="form-tree"></div>
+    </div>
+
+    <!-- 右侧主区 -->
+    <div class="app-main">
+        <!-- 标题栏 -->
+        <div class="page-header">
+            <div class="d-flex align-items-center">
+                <h4 class="mb-0"><b>{{ form.title }}</b></h4>
+                {% if form.description %}
+                <span class="page-desc">{{ form.description }}</span>
+                {% endif %}
+                <span class="type-badge {{ 'exec' if form.query_type == 'exec' else 'select' }}">
+                    {{ '存储过程' if form.query_type == 'exec' else 'SELECT' }}
+                </span>
+            </div>
+        </div>
+
+        <!-- 查询条件 -->
+        {% if form.params %}
+        <div class="params-panel">
+            <div class="params-title">查询条件</div>
+            <div class="params-grid">
+                {% for p in form.params %}
+                <div class="param-field">
+                    <label>{{ p.label }}</label>
+                    {% if p.ptype == 'date' %}
+                    <input type="date" class="param-input" data-name="{{ p.name }}"
+                           value="{{ p.default|replace('{today}', '') }}">
+                    {% elif p.ptype == 'datetime' %}
+                    <input type="datetime-local" class="param-input" data-name="{{ p.name }}">
+                    {% elif p.ptype == 'number' %}
+                    <input type="number" class="param-input" data-name="{{ p.name }}"
+                           value="{{ p.default }}" placeholder="数字">
+                    {% elif p.ptype == 'select' %}
+                    <select class="param-input" data-name="{{ p.name }}">
+                        {% for opt in p.options %}
+                        <option value="{{ opt }}" {{ 'selected' if opt == p.default else '' }}>{{ opt }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <input type="text" class="param-input" data-name="{{ p.name }}"
+                           value="{{ p.default|replace('{today}', '') }}" placeholder="{{ p.label }}">
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- 操作栏 -->
+        <div class="action-bar">
+            <button class="btn-execute" id="btn-execute" onclick="executeQuery()">
+                ▶ 执行查询
+            </button>
+            <button class="btn-export" id="btn-export" onclick="exportExcel()" disabled>
+                📥 导出 Excel
+            </button>
+            <div class="spinner d-none" id="loading"></div>
+            <span class="action-status" id="status-text"></span>
+        </div>
+
+        <!-- 结果区 -->
+        <div class="result-panel">
+            <table id="result-table" class="display" style="width:100%">
+                <thead id="result-thead"></thead>
+                <tbody id="result-tbody"></tbody>
+            </table>
+            <div class="result-empty" id="result-empty">
+                执行查询后，结果将显示在这里
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    window.DBQUERY = { filePath: "{{ file_path|replace('#', '%23') }}", formParams: {{ form.params | tojson }} };
+</script>
+{% endblock %}

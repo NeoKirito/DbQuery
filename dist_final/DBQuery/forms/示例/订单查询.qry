@@ -1,0 +1,28 @@
+[meta]
+title = 订单查询
+group = 示例
+description = 按日期范围、客户名称、状态查询订单列表
+
+[params]
+start_date    = 开始日期 | date
+end_date      = 结束日期 | date | {today}
+customer_name = 客户名称 | text
+status        = 订单状态 | select:全部,待处理,已完成,已取消 | 全部
+
+[sql]
+SELECT TOP 500
+    o.OrderID       AS 订单编号,
+    o.OrderDate     AS 下单日期,
+    c.CustomerName  AS 客户名称,
+    p.ProductName   AS 产品名称,
+    o.Quantity      AS 数量,
+    o.UnitPrice     AS 单价,
+    o.Quantity * o.UnitPrice AS 总金额,
+    o.Status        AS 状态
+FROM Orders o
+    JOIN Customers c ON o.CustomerID = c.CustomerID
+    JOIN Products  p ON o.ProductID  = p.ProductID
+WHERE o.OrderDate BETWEEN '{start_date}' AND '{end_date}'
+  AND ('{customer_name}' = '' OR c.CustomerName LIKE '%{customer_name}%')
+  AND ('{status}' = '全部' OR o.Status = '{status}')
+ORDER BY o.OrderDate DESC

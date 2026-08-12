@@ -1,0 +1,31 @@
+[meta]
+title = 用户查询
+group = 示例
+description = 按关键字、部门、状态查询用户信息
+
+[params]
+keyword    = 姓名/账号关键字 | text
+department = 部门           | text
+status     = 状态           | select:全部,启用,禁用 | 全部
+
+[sql]
+SELECT TOP 200
+    UserID      AS 用户ID,
+    UserName    AS 登录账号,
+    FullName    AS 姓名,
+    Department  AS 部门,
+    Email       AS 邮箱,
+    Phone       AS 电话,
+    CASE Status WHEN 1 THEN '启用' WHEN 0 THEN '禁用' ELSE '未知' END AS 状态,
+    CreateTime  AS 创建时间,
+    LastLogin   AS 最后登录
+FROM Users
+WHERE 1=1
+  AND ('{keyword}' = ''
+       OR UserName LIKE '%{keyword}%'
+       OR FullName  LIKE '%{keyword}%')
+  AND ('{department}' = '' OR Department LIKE '%{department}%')
+  AND ('{status}' = '全部'
+       OR ('{status}' = '启用' AND Status = 1)
+       OR ('{status}' = '禁用' AND Status = 0))
+ORDER BY Department, FullName

@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="app-layout">
+    <!-- 左侧边栏 -->
+    <div class="app-sidebar" id="sidebar">
+        <div class="sidebar-title">📋 表单列表</div>
+        <input type="text" class="sidebar-search" id="form-search"
+               placeholder="搜索表单…" oninput="filterForms()">
+        <div class="sidebar-list" id="form-tree">
+            {% for group, forms in forms_data.items() %}
+            <div class="nav-group">
+                <div class="nav-group-title" onclick="toggleGroup(this)">
+                    <span class="arrow">▾</span> {{ group }}
+                    <span class="count">{{ forms|length }}</span>
+                </div>
+                <div class="nav-group-items">
+                    {% for form in forms %}
+                    <a href="/query/{{ form.file_path|replace('#', '%23') }}" class="nav-item-link" data-title="{{ form.title|lower }}">
+                        📄 {{ form.title }}
+                        {% if form.description %}<span class="nav-item-desc">{{ form.description }}</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- 右侧主区 -->
+    <div class="app-main">
+        <div class="welcome-panel">
+            <div class="welcome-icon">📊</div>
+            <h3>数据库查询工具</h3>
+            <p class="text-muted">← 从左侧选择一个表单开始查询</p>
+            <div class="welcome-features">
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <div class="feature-title">灵活查询</div>
+                    <div class="feature-desc">文本、日期、数字、下拉等多种参数</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📥</div>
+                    <div class="feature-title">Excel 导出</div>
+                    <div class="feature-desc">一键导出带格式的 Excel 文件</div>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <div class="feature-title">安全可靠</div>
+                    <div class="feature-desc">仅允许查询，禁止危险操作</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

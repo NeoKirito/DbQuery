@@ -1,0 +1,21 @@
+# 数据库查询工具 — Python 依赖
+# Python 版本：3.7.0（兼容 Windows 7）
+#
+# 安装命令：pip install -r requirements.txt
+
+# GUI 框架（使用 5.15.x，Win7 可用最高稳定版）
+PyQt5==5.15.9
+PyQt5-Qt5==5.15.2
+PyQt5-sip==12.13.0
+
+# SQL Server 连接（需系统已安装 ODBC 驱动）
+pyodbc==4.0.39
+
+# Excel 导出
+openpyxl==3.1.2
+
+# Web 服务（桌面版不需要，Web 版必需）
+Flask==2.2.5
+
+# 打包为 exe
+pyinstaller==5.13.2
