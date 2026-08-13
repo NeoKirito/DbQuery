@@ -332,6 +332,10 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn(b'data-embed-mode="1"', response.data)
 
     def test_query_page_hides_technical_badge_and_sidebar_when_embedded(self):
+        standalone = self.client.get('/query/{}'.format(self.file_path))
+        self.assertEqual(standalone.status_code, 200)
+        self.assertNotIn(b'type-badge', standalone.data)
+
         response = self.client.get('/query/{}?embed=1&sidebar=0'.format(self.file_path))
         self.assertEqual(response.status_code, 200)
         self.assertIn('查询条件'.encode('utf-8'), response.data)

@@ -29,11 +29,6 @@
                 <p class="page-desc">{{ form.description }}</p>
                 {% endif %}
             </div>
-            {% if not embed_mode %}
-            <span class="type-badge {{ 'exec' if form.query_type == 'exec' else 'select' }}">
-                {{ '存储过程' if form.query_type == 'exec' else 'SELECT' }}
-            </span>
-            {% endif %}
         </header>
 
         <section class="business-section conditions-section" aria-labelledby="conditions-heading">
