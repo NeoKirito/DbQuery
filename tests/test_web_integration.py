@@ -317,6 +317,8 @@ class WebRouteTests(unittest.TestCase):
         response = self.client.get('/')
         self.assertEqual(response.status_code, 200)
         self.assertIn('综合查询'.encode('utf-8'), response.data)
+        self.assertIn(b'class="app-body"', response.data)
+        self.assertNotIn(b'app-navbar', response.data)
 
         response = self.client.get('/?hide_header=1')
         self.assertEqual(response.status_code, 200)

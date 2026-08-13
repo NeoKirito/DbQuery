@@ -101,13 +101,12 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
 }
 .btn-nav:hover { color: #fff; border-color: #c5d6e4; background: rgba(255,255,255,.09); }
 
-/* 仅 app-main 的结果区处理纵向滚动，避免 iframe 出现页面双滚动条。 */
+/* 顶部工具栏已移除；查询内容区始终占用完整视口，避免左侧项目导航被压缩。 */
 .app-body {
-    height: calc(100vh - 42px);
+    height: 100vh;
     min-height: 0;
     overflow: hidden;
 }
-.embed-mode .app-body { height: 100vh; }
 
 .app-layout {
     display: flex;
