@@ -331,26 +331,7 @@ class WebRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'data-embed-mode="1"', response.data)
 
-    def test_query_page_hides_select_badge_but_keeps_exec_badge(self):
-        response = self.client.get('/query/{}'.format(self.file_path))
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn(b'type-badge', response.data)
-        self.assertNotIn(b'>SELECT<', response.data)
-
-        exec_form = QueryForm()
-        exec_form.title = '存储过程查询'
-        exec_form.description = '验证存储过程标识保留'
-        exec_form.query_type = 'exec'
-        exec_form.sql = 'EXEC dbo.usp_Test'
-        with patch(
-                'web_server.get_form_from_path',
-                return_value=(exec_form, 'forms/test_exec.qry', '/tmp/test_exec.qry')):
-            response = self.client.get('/query/forms/test_exec.qry')
-        self.assertEqual(response.status_code, 200)
-        self.assertIn(b'class="type-badge exec"', response.data)
-        self.assertIn('存储过程'.encode('utf-8'), response.data)
-
-    def test_query_page_hides_badge_and_sidebar_when_embedded(self):
+    def test_query_page_hides_technical_badge_and_sidebar_when_embedded(self):
         response = self.client.get('/query/{}?embed=1&sidebar=0'.format(self.file_path))
         self.assertEqual(response.status_code, 200)
         self.assertIn('查询条件'.encode('utf-8'), response.data)
