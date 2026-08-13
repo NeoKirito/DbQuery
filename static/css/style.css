@@ -523,3 +523,91 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
     .project-switcher-current { font-size: 11px; }
     .project-switcher-panel { right: -4px; }
 }
+
+/* Result grid: keep DataTables controls and header inside the result region. */
+.result-heading { display: flex; align-items: center; min-width: 0; }
+.result-heading-left { display: flex; align-items: center; min-width: 0; gap: 9px; }
+.result-title { flex: 0 0 auto; }
+.result-warning {
+    min-width: 0;
+    overflow: hidden;
+    color: #9a6b1d;
+    font-size: 12px;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.result-status { flex: 0 1 auto; min-width: 0; }
+
+.result-section .result-panel {
+    display: flex;
+    min-height: 0;
+    overflow: hidden;
+}
+.result-panel .dataTables_wrapper {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    height: 100%;
+    padding: 0 10px 7px;
+    overflow: hidden;
+}
+.result-panel .dt-topbar,
+.result-panel .dt-bottombar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex: 0 0 auto;
+    min-height: 36px;
+    color: var(--peis-text-muted);
+    background: #fff;
+    font-size: 12px;
+}
+.result-panel .dt-topbar { border-bottom: 1px solid var(--peis-border-light); }
+.result-panel .dt-bottombar { border-top: 1px solid var(--peis-border-light); }
+.result-panel .dt-page-size,
+.result-panel .dt-filter,
+.result-panel .dt-info,
+.result-panel .dt-pagination { white-space: nowrap; }
+.result-panel .dt-filter { margin-left: auto; text-align: right; }
+.result-panel .dt-topbar .dataTables_length,
+.result-panel .dt-topbar .dataTables_filter,
+.result-panel .dt-bottombar .dataTables_info,
+.result-panel .dt-bottombar .dataTables_paginate { padding: 0; }
+
+.result-panel .dataTables_scroll {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+.result-panel .dataTables_scrollHead {
+    flex: 0 0 auto;
+    overflow: hidden !important;
+}
+.result-panel .dataTables_scrollBody {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto !important;
+    border-bottom: 1px solid #d8e1e7;
+}
+.result-panel .dataTables_scrollHead table,
+.result-panel .dataTables_scrollBody table { margin: 0 !important; }
+.result-panel .dataTables_scrollHead th {
+    padding: 6px 9px !important;
+    color: #36566f !important;
+    border-top: 0 !important;
+    border-right: 1px solid #d3e0e9 !important;
+    border-bottom: 1px solid #b8cfdf !important;
+    background: #eaf3f9 !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+    .result-warning { max-width: 34vw; }
+    .result-panel .dt-filter input { max-width: 130px; }
+}

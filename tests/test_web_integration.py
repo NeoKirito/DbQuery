@@ -342,6 +342,30 @@ class WebRouteTests(unittest.TestCase):
         self.assertNotIn('type-badge', html)
         self.assertNotIn('>SELECT<', html)
 
+    def test_result_grid_uses_fixed_datatables_regions_and_heading_warning_slot(self):
+        response = self.client.get('/query/{}?embed=1'.format(self.file_path))
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('id="result-warning"', html)
+        self.assertIn('class="inline-message d-none"', html)  # Errors retain a prominent dedicated message.
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, 'static', 'js', 'app.js'), encoding='utf-8') as source_file:
+            javascript = source_file.read()
+        with open(os.path.join(root, 'static', 'css', 'style.css'), encoding='utf-8') as source_file:
+            stylesheet = source_file.read()
+
+        self.assertIn("<'dt-topbar'<'dt-page-size'l><'dt-filter'f>>", javascript)
+        self.assertIn("<'dt-bottombar'<'dt-info'i><'dt-pagination'p>>", javascript)
+        self.assertIn("setResultWarning('已显示前 ' + data.max_rows", javascript)
+        self.assertNotIn("showInlineMessage(\n                    'warning',\n                    '查询结果较多", javascript)
+        self.assertIn('.result-section .result-panel {', stylesheet)
+        self.assertIn('overflow: hidden;', stylesheet)
+        self.assertIn('.result-panel .dataTables_scrollBody {', stylesheet)
+        self.assertIn('overflow: auto !important;', stylesheet)
+        self.assertIn('.result-panel .dt-topbar,', stylesheet)
+        self.assertIn('.result-panel .dt-bottombar {', stylesheet)
+
     def test_sidebar_parameter_still_supports_explicit_embed_sidebar(self):
         response = self.client.get('/query/{}?embed=1&sidebar=1'.format(self.file_path))
         self.assertEqual(response.status_code, 200)
