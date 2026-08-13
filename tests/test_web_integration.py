@@ -265,6 +265,14 @@ SELECT '{keyword}' AS Keyword
         self.assertTrue(FormParser.is_safe_sql('EXEC dbo.usp_Test @P=1', 'exec')[0])
         self.assertFalse(FormParser.is_safe_sql('EXEC dbo.usp_Test; DELETE FROM T', 'exec')[0])
 
+    def test_system_form_casts_extended_property_to_text_for_odbc(self):
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        system_form = os.path.join(root_dir, 'forms', '系统', '数据库表结构.qry')
+        with open(system_form, 'r', encoding='utf-8') as form_file:
+            sql = FormParser.parse_file(system_form).sql
+        self.assertIn('CAST(ep.value AS NVARCHAR(4000))', sql)
+        self.assertEqual(FormParser.is_safe_sql(sql, 'select'), (True, 'OK'))
+
     def test_checkbox_web_submit_contract_is_one_or_zero(self):
         js_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'js', 'app.js')
         with open(js_path, 'r', encoding='utf-8') as js_file:
