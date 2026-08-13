@@ -6,6 +6,7 @@ $(document).ready(function () {
     initializeDefaultValues();
     restoreSidebarState();
     loadFormTree();
+    initializeProjectSwitcher();
 
     $(document).on('keydown', '.param-input', function (event) {
         if (event.key === 'Enter' && !$(this).is('textarea')) {
@@ -50,40 +51,43 @@ function initializeDefaultValues() {
 }
 
 function loadFormTree() {
-    var $tree = $('#form-tree');
-    if (!$tree.length) return;
-
-    if ($tree.children().length > 0) {
+    var $trees = $('#form-tree, #project-menu-tree');
+    if (!$trees.length || $trees.filter(':empty').length === 0) {
         fixFormLinks();
         highlightCurrentForm();
         return;
     }
 
     $.get('/api/forms', function (data) {
-        var html = '';
-        for (var group in data) {
-            if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
-            var forms = data[group];
-            html += '<div class="nav-group">';
-            html += '<button class="nav-group-title" type="button" onclick="toggleGroup(this)">';
-            html += '<span class="arrow" aria-hidden="true">▾</span><span>' + esc(group) + '</span>';
-            html += '<span class="count">' + forms.length + '</span></button>';
-            html += '<div class="nav-group-items">';
-            for (var index = 0; index < forms.length; index++) {
-                var form = forms[index];
-                var url = preserveEmbedParams('/query/' + encodeFilePath(form.file_path));
-                html += '<a href="' + esc(url) + '" class="nav-item-link' + (form.description ? ' has-desc' : '') + '" data-title="' + esc(form.title.toLowerCase()) + '">';
-                html += svgIcon('document', 'nav-item-icon') + '<span class="nav-item-content"><span class="nav-item-title">' + esc(form.title) + '</span>';
-                if (form.description) html += '<span class="nav-item-desc">' + esc(form.description) + '</span>';
-                html += '</span></a>';
-            }
-            html += '</div></div>';
-        }
-        $tree.html(html);
+        var html = buildFormTree(data);
+        $trees.html(html);
         highlightCurrentForm();
     }).fail(function () {
         showToast('查询项目加载失败，请稍后刷新页面。', 'error');
     });
+}
+
+function buildFormTree(data) {
+    var html = '';
+    for (var group in data) {
+        if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
+        var forms = data[group];
+        html += '<div class="nav-group">';
+        html += '<button class="nav-group-title" type="button" onclick="toggleGroup(this)">';
+        html += '<span class="arrow" aria-hidden="true">▾</span><span>' + esc(group) + '</span>';
+        html += '<span class="count">' + forms.length + '</span></button>';
+        html += '<div class="nav-group-items">';
+        for (var index = 0; index < forms.length; index++) {
+            var form = forms[index];
+            var url = preserveEmbedParams('/query/' + encodeFilePath(form.file_path));
+            html += '<a href="' + esc(url) + '" class="nav-item-link' + (form.description ? ' has-desc' : '') + '" data-title="' + esc(form.title.toLowerCase()) + '">';
+            html += svgIcon('document', 'nav-item-icon') + '<span class="nav-item-content"><span class="nav-item-title">' + esc(form.title) + '</span>';
+            if (form.description) html += '<span class="nav-item-desc">' + esc(form.description) + '</span>';
+            html += '</span></a>';
+        }
+        html += '</div></div>';
+    }
+    return html;
 }
 
 function encodeFilePath(filePath) {
@@ -120,10 +124,48 @@ function toggleGroup(element) {
 }
 
 function filterForms() {
-    var text = ($('#form-search').val() || '').toLowerCase();
-    $('.nav-item-link').each(function () {
+    filterFormTree($('#form-search').val(), $('#form-tree'));
+}
+
+function filterFormTree(value, $tree) {
+    var text = (value || '').toLowerCase();
+    $tree.find('.nav-item-link').each(function () {
         var title = $(this).data('title') || '';
         $(this).toggle(!text || title.indexOf(text) >= 0);
+    });
+    $tree.find('.nav-group').each(function () {
+        var $group = $(this);
+        $group.toggle(!text || $group.find('.nav-item-link:visible').length > 0);
+        if (text) $group.find('.nav-group-items').show();
+    });
+}
+
+function initializeProjectSwitcher() {
+    var $switcher = $('#project-switcher');
+    var $trigger = $('#project-switcher-trigger');
+    var $panel = $('#project-switcher-panel');
+    if (!$switcher.length || !$trigger.length || !$panel.length) return;
+
+    $trigger.on('click', function () {
+        var opening = $panel.prop('hidden');
+        $panel.prop('hidden', !opening);
+        $trigger.attr('aria-expanded', opening ? 'true' : 'false');
+        if (opening) $('#project-search').trigger('focus');
+    });
+    $('#project-search').on('input', function () {
+        filterFormTree($(this).val(), $('#project-menu-tree'));
+    });
+    $(document).on('click', function (event) {
+        if (!$(event.target).closest('#project-switcher').length) {
+            $panel.prop('hidden', true);
+            $trigger.attr('aria-expanded', 'false');
+        }
+    });
+    $(document).on('keydown', function (event) {
+        if (event.key === 'Escape' && !$panel.prop('hidden')) {
+            $panel.prop('hidden', true);
+            $trigger.attr('aria-expanded', 'false').trigger('focus');
+        }
     });
 }
 

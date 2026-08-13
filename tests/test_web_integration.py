@@ -331,13 +331,23 @@ class WebRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'data-embed-mode="1"', response.data)
 
-    def test_query_page_hides_technical_badge_and_sidebar_when_embedded(self):
-        response = self.client.get('/query/{}?embed=1&sidebar=0'.format(self.file_path))
+    def test_query_page_removes_technical_badges_and_uses_embed_project_switcher(self):
+        response = self.client.get('/query/{}?embed=1'.format(self.file_path))
         self.assertEqual(response.status_code, 200)
-        self.assertIn('查询条件'.encode('utf-8'), response.data)
-        self.assertIn('查询结果'.encode('utf-8'), response.data)
-        self.assertNotIn(b'class="app-sidebar"', response.data)
-        self.assertNotIn(b'type-badge', response.data)
+        html = response.get_data(as_text=True)
+        self.assertIn('查询条件', html)
+        self.assertIn('查询结果', html)
+        self.assertIn('project-switcher', html)
+        self.assertNotIn('class="app-sidebar"', html)
+        self.assertNotIn('type-badge', html)
+        self.assertNotIn('>SELECT<', html)
+
+    def test_sidebar_parameter_still_supports_explicit_embed_sidebar(self):
+        response = self.client.get('/query/{}?embed=1&sidebar=1'.format(self.file_path))
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('class="app-sidebar"', html)
+        self.assertNotIn('project-switcher', html)
 
     def test_forms_api_and_limited_query_response(self):
         response = self.client.get('/api/forms')

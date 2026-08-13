@@ -23,16 +23,26 @@
 
     <section class="app-main">
         <header class="page-header">
-            <div>
+            <div class="page-title-block">
                 <h1 class="page-title">{{ form.title }}</h1>
                 {% if form.description %}
                 <p class="page-desc">{{ form.description }}</p>
                 {% endif %}
             </div>
-            {% if not embed_mode %}
-            <span class="type-badge {{ 'exec' if form.query_type == 'exec' else 'select' }}">
-                {{ '存储过程' if form.query_type == 'exec' else 'SELECT' }}
-            </span>
+            {% if sidebar_hidden %}
+            <div class="project-switcher" id="project-switcher">
+                <button class="project-switcher-trigger" id="project-switcher-trigger" type="button"
+                        aria-expanded="false" aria-controls="project-switcher-panel">
+                    <span class="project-switcher-label">查询项目</span>
+                    <span class="project-switcher-current">当前：{{ form.title }}</span>
+                    <span class="project-switcher-caret" aria-hidden="true">▾</span>
+                </button>
+                <div class="project-switcher-panel" id="project-switcher-panel" hidden>
+                    <label class="visually-hidden" for="project-search">搜索查询项目</label>
+                    <input type="search" class="project-search" id="project-search" placeholder="搜索查询项目">
+                    <div class="project-menu-tree" id="project-menu-tree"></div>
+                </div>
+            </div>
             {% endif %}
         </header>
 
@@ -92,12 +102,13 @@
                     <span class="button-text">导出</span>
                 </button>
                 <span class="spinner d-none" id="loading" aria-label="正在查询"></span>
-                <span class="action-status" id="status-text" aria-live="polite"></span>
             </div>
         </section>
-
         <section class="business-section result-section" aria-labelledby="result-heading">
-            <div class="section-heading result-heading" id="result-heading">查询结果</div>
+            <div class="section-heading result-heading" id="result-heading">
+                <span>查询结果</span>
+                <span class="action-status result-status" id="status-text" aria-live="polite"></span>
+            </div>
             <div id="result-message" class="inline-message d-none" role="status"></div>
             <div class="result-panel">
                 <table id="result-table" class="display" style="width:100%">

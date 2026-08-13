@@ -60,7 +60,9 @@ def get_embed_context():
     """统一解析页面级嵌入状态，供所有页面模板复用。"""
     hide_header = request.args.get('hide_header') == '1'
     embed = request.args.get('embed') == '1' or hide_header
-    sidebar_hidden = request.args.get('sidebar') == '0'
+    sidebar_arg = request.args.get('sidebar')
+    # 嵌入宿主通常已有自己的导航；仅在显式 sidebar=1 时保留 DbQuery 侧栏。
+    sidebar_hidden = sidebar_arg == '0' or (embed and sidebar_arg != '1')
     return {
         'embed_mode': embed,
         'hide_header': hide_header or embed,

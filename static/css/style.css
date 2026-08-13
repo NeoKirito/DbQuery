@@ -262,36 +262,32 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
 .page-header {
     display: flex;
     flex: 0 0 auto;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    min-height: 50px;
-    padding: 9px 14px;
+    min-height: 44px;
+    padding: 7px 14px;
     border-bottom: 1px solid var(--peis-border-light);
     background: #fff;
 }
-.page-title { margin: 0; color: #2e4f69; font-size: 16px; font-weight: 600; line-height: 1.35; }
-.page-desc { margin: 2px 0 0; color: var(--peis-text-muted); font-size: 12px; }
-.type-badge {
-    margin-left: 12px;
-    padding: 2px 7px;
-    border: 1px solid;
-    border-radius: 2px;
-    font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
-}
-.type-badge.select { color: #3e7551; border-color: #b8d9c1; background: #eff8f1; }
-.type-badge.exec { color: #8d641d; border-color: #e4c88d; background: #fff8e8; }
+.page-title-block { min-width: 0; }
+.page-title { margin: 0; color: #2e4f69; font-size: 16px; font-weight: 600; line-height: 1.3; }
+.page-desc { margin: 1px 0 0; color: var(--peis-text-muted); font-size: 12px; line-height: 1.25; }
+.embed-mode .page-header { min-height: 42px; padding-top: 6px; padding-bottom: 6px; }
+.embed-mode .page-title { font-size: 15px; }
+.embed-mode .page-desc { display: inline; margin-left: 8px; font-size: 11px; }
 
 .business-section { flex: 0 0 auto; }
 .section-heading {
-    min-height: 29px;
-    padding: 5px 14px;
-    color: #315f86;
-    border-top: 1px solid #cfe0ed;
-    border-bottom: 1px solid #cfe0ed;
-    background: var(--peis-accent-light);
-    font-size: 13px;
+    display: flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 11px;
+    color: #496274;
+    border-top: 1px solid var(--peis-border-light);
+    border-bottom: 1px solid var(--peis-border-light);
+    border-left: 3px solid var(--peis-primary);
+    background: #f8fafb;
+    font-size: 12px;
     font-weight: 600;
     line-height: 18px;
 }
@@ -300,19 +296,19 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
 .params-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px 14px;
-    padding: 9px 14px 7px;
+    gap: 7px 12px;
+    padding: 7px 12px 5px;
     background: #fff;
 }
 .param-field { flex: 0 1 var(--param-width, 210px); width: var(--param-width, 210px); max-width: 100%; }
-.param-field > label:first-child { display: block; margin: 0 0 3px; color: #4f6170; font-size: 12px; }
+.param-field > label:first-child { display: block; margin: 0 0 2px; color: #4f6170; font-size: 12px; }
 .required-mark { margin-left: 2px; color: var(--peis-danger); font-weight: 700; }
 .param-field input:not([type="checkbox"]):not([type="radio"]),
 .param-field select,
 .param-field textarea {
     width: 100%;
-    height: 29px;
-    padding: 4px 7px;
+    height: 28px;
+    padding: 3px 7px;
     color: var(--peis-text);
     border: 1px solid #c4d1dc;
     border-radius: 2px;
@@ -340,11 +336,11 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
     flex: 0 0 auto;
     align-items: center;
     gap: 7px;
-    min-height: 42px;
-    padding: 6px 14px;
+    min-height: 38px;
+    padding: 5px 12px;
     border-top: 1px solid var(--peis-border-light);
     border-bottom: 1px solid var(--peis-border-light);
-    background: var(--peis-bg-muted);
+    background: #fff;
 }
 .btn-primary-action,
 .btn-secondary-action {
@@ -368,7 +364,8 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
 .action-status { min-width: 0; margin-left: 3px; overflow: hidden; color: var(--peis-text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 .result-section { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
-.result-heading { flex: 0 0 auto; }
+.result-heading { flex: 0 0 auto; justify-content: space-between; }
+.result-status { margin-left: 12px; text-align: right; }
 .inline-message {
     flex: 0 0 auto;
     margin: 7px 12px 0;
@@ -459,4 +456,70 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
     .action-bar { padding-right: 10px; padding-left: 10px; }
     .param-field { flex: 1 1 160px; width: auto; }
     .dataTables_wrapper { padding-right: 7px; padding-left: 7px; }
+}
+
+/* 无永久侧栏时的紧凑查询项目切换器。 */
+.project-switcher { position: relative; flex: 0 0 auto; margin-left: 12px; }
+.project-switcher-trigger {
+    display: inline-flex;
+    align-items: center;
+    max-width: min(430px, 46vw);
+    min-height: 28px;
+    gap: 7px;
+    padding: 3px 8px;
+    color: #40586b;
+    border: 1px solid #c8d3dc;
+    border-radius: 2px;
+    background: #fff;
+    font-size: 12px;
+    line-height: 18px;
+    text-align: left;
+}
+.project-switcher-trigger:hover,
+.project-switcher-trigger:focus {
+    color: #284f6e;
+    border-color: #8da9bd;
+    background: #f8fafb;
+    outline: none;
+}
+.project-switcher-label { color: #667887; white-space: nowrap; }
+.project-switcher-current { overflow: hidden; color: #365a78; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.project-switcher-caret { margin-left: auto; color: #60788c; }
+.project-switcher-panel {
+    position: absolute;
+    z-index: 1000;
+    top: calc(100% + 4px);
+    right: 0;
+    width: min(390px, calc(100vw - 28px));
+    max-height: min(500px, calc(100vh - 74px));
+    padding: 8px;
+    border: 1px solid #bdcbd7;
+    border-radius: 2px;
+    background: #fff;
+}
+.project-search {
+    width: 100%;
+    height: 28px;
+    padding: 3px 7px;
+    color: var(--peis-text);
+    border: 1px solid var(--peis-border);
+    border-radius: 2px;
+    background: #fff;
+    font-size: 12px;
+    outline: none;
+}
+.project-search:focus { border-color: var(--peis-primary); box-shadow: 0 0 0 1px #d8e8f5; }
+.project-menu-tree { max-height: min(438px, calc(100vh - 122px)); margin-top: 5px; overflow: auto; }
+.project-menu-tree .nav-group { margin-top: 2px; }
+.project-menu-tree .nav-group-title { min-height: 27px; padding: 4px 5px; }
+.project-menu-tree .nav-item-link { padding: 5px 7px; }
+.project-menu-tree .nav-item-link.has-desc { min-height: 40px; }
+
+@media (max-width: 640px) {
+    .page-header { align-items: flex-start; }
+    .embed-mode .page-desc { display: block; margin-left: 0; }
+    .project-switcher-trigger { max-width: 45vw; }
+    .project-switcher-label { display: none; }
+    .project-switcher-current { font-size: 11px; }
+    .project-switcher-panel { right: -4px; }
 }
