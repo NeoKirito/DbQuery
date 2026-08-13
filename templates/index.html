@@ -26,8 +26,10 @@
                     {% for form in forms %}
                     <a href="/query/{{ form.file_path|replace('#', '%23') }}" class="nav-item-link{% if form.description %} has-desc{% endif %}" data-title="{{ form.title|lower }}">
                         <svg class="icon nav-item-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
-                        <span>{{ form.title }}</span>
-                        {% if form.description %}<span class="nav-item-desc">{{ form.description }}</span>{% endif %}
+                        <span class="nav-item-content">
+                            <span class="nav-item-title">{{ form.title }}</span>
+                            {% if form.description %}<span class="nav-item-desc">{{ form.description }}</span>{% endif %}
+                        </span>
                     </a>
                     {% endfor %}
                 </div>

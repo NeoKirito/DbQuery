@@ -72,10 +72,10 @@ function loadFormTree() {
             for (var index = 0; index < forms.length; index++) {
                 var form = forms[index];
                 var url = preserveEmbedParams('/query/' + encodeFilePath(form.file_path));
-                html += '<a href="' + esc(url) + '" class="nav-item-link" data-title="' + esc(form.title.toLowerCase()) + '">';
-                html += svgIcon('document', 'nav-item-icon') + '<span>' + esc(form.title) + '</span>';
+                html += '<a href="' + esc(url) + '" class="nav-item-link' + (form.description ? ' has-desc' : '') + '" data-title="' + esc(form.title.toLowerCase()) + '">';
+                html += svgIcon('document', 'nav-item-icon') + '<span class="nav-item-content"><span class="nav-item-title">' + esc(form.title) + '</span>';
                 if (form.description) html += '<span class="nav-item-desc">' + esc(form.description) + '</span>';
-                html += '</a>';
+                html += '</span></a>';
             }
             html += '</div></div>';
         }
