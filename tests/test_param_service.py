@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 
+from core.sql_safety import normalize_sql_for_safety
 from core.param_service import (
     OptionsLoadError, ParameterError, QueryConfigurationError, RequiredParameterError,
     dynamic_options, load_options, merge_options, normalize_params, resolve_default,
@@ -198,6 +199,47 @@ SELECT 1
         for sql in good_sqls:
             ok, reason = validate_options_sql(sql)
             self.assertTrue(ok, msg='\u5e94通过但被拒绝（' + reason + '\uff09： ' + repr(sql))
+
+    def test_sql_safety_normalization_preserves_comment_token_separation(self):
+        self.assertEqual(
+            normalize_sql_for_safety('SELECT 1 INTO/**/#DBQuery_Options_Test'),
+            'SELECT 1 INTO #DBQuery_Options_Test'
+        )
+        self.assertEqual(
+            normalize_sql_for_safety('SELECT 1 INTO /* comment */ #DBQuery_Options_Test'),
+            'SELECT 1 INTO   #DBQuery_Options_Test'
+        )
+        self.assertEqual(
+            normalize_sql_for_safety('SELECT 1\nINTO/**/\n#DBQuery_Options_Test'),
+            'SELECT 1\nINTO \n#DBQuery_Options_Test'
+        )
+
+    def test_form_and_options_sql_reject_comment_separated_select_into_variants(self):
+        blocked = [
+            'SELECT 1 INTO/**/#DBQuery_Options_Test',
+            'SELECT 1 INTO/**/##DBQuery_Options_Test',
+            'SELECT 1 INTO/**/[DBQuery_Options_Test]',
+            'SELECT 1 INTO/**/[dbo].[DBQuery_Options_Test]',
+            'SELECT 1 INTO /* comment */ #DBQuery_Options_Test',
+            'SELECT 1\nINTO/**/\n#DBQuery_Options_Test',
+            'select 1 into/**/[dbo].[DBQuery_Options_Test]',
+        ]
+        for sql in blocked:
+            with self.subTest(sql=sql):
+                self.assertFalse(FormParser.is_safe_sql(sql, 'select')[0])
+                self.assertFalse(validate_options_sql(sql)[0])
+
+    def test_safe_selects_with_comments_remain_allowed(self):
+        allowed = [
+            'SELECT ID, Name FROM Doctor',
+            'SELECT DISTINCT Department FROM Employee',
+            'SELECT ID /* harmless comment */, Name FROM Doctor',
+            'SELECT ID FROM Doctor /* trailing comment */',
+        ]
+        for sql in allowed:
+            with self.subTest(sql=sql):
+                self.assertEqual(FormParser.is_safe_sql(sql, 'select'), (True, 'OK'))
+                self.assertEqual(validate_options_sql(sql), (True, 'OK'))
 
     def test_unknown_or_unresolved_sql_placeholders_raise_configuration_error(self):
         form = QueryForm()

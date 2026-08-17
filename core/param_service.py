@@ -8,6 +8,8 @@
 import datetime
 import logging
 import re
+
+from core.sql_safety import normalize_sql_for_safety
 from decimal import Decimal, InvalidOperation
 
 
@@ -235,8 +237,7 @@ def validate_options_sql(sql):
     """验证动态候选 SQL 为单条只读 SELECT。"""
     from form_parser import FormParser
 
-    clean = re.sub(r'--[^\n]*', '', sql or '')
-    clean = re.sub(r'/\*.*?\*/', '', clean, flags=re.DOTALL).strip()
+    clean = normalize_sql_for_safety(sql).strip()
     if clean.endswith(';'):
         clean = clean[:-1].strip()
     if ';' in clean:

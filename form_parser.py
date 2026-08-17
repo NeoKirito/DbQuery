@@ -8,6 +8,8 @@ import os
 import re
 import shutil
 
+from core.sql_safety import normalize_sql_for_safety
+
 TEMPLATE = u"""\
 [meta]
 title = 新建查询
@@ -245,9 +247,7 @@ class FormParser:
     @staticmethod
     def is_safe_sql(sql, query_type='select'):
         """安全检查：SELECT 仅允许查询；exec 仅允许受控存储过程调用。"""
-        clean = re.sub(r'--[^\n]*', '', sql)
-        clean = re.sub(r'/\*.*?\*/', '', clean, flags=re.DOTALL)
-        clean = clean.strip()
+        clean = normalize_sql_for_safety(sql).strip()
 
         if not clean:
             return False, 'SQL内容为空'
@@ -277,7 +277,7 @@ class FormParser:
             return False, 'SQL 包含禁止的 SELECT INTO（禁止写入操作）'
 
         blocked = (
-            r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|XP_|SP_EXECUTESQL)\b'
+            r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|XP_|SP_EXECUTESQL|INTO\s+(?:[#\[]|\w))'
         )
         match = re.search(blocked, clean, re.IGNORECASE)
         if match:
