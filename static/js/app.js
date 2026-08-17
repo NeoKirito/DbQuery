@@ -59,6 +59,8 @@ function initializeSearchableSelects() {
         var $value = $root.find('.searchable-select-value');
         var $menu = $root.find('.searchable-select-menu');
         var $toggle = $root.find('.searchable-select-toggle');
+        // P1-1: 读取 allow_custom 标志，决定是否允许提交候选项外的自定义值。
+        var allowCustom = $root.attr('data-allow-custom') === '1';
         var activeIndex = -1;
 
         function visibleOptions() {
@@ -85,6 +87,7 @@ function initializeSearchableSelects() {
             if (visibleOptions().length) setActive(0);
         }
         function selectOption($option) {
+            // 点选候选项：始终提交 data-value（如 DoctorID），而不是显示文字。
             if (!$option || !$option.length) return;
             $input.val($option.text());
             $value.val($option.data('value'));
@@ -133,9 +136,16 @@ function initializeSearchableSelects() {
 
         $input.on('focus', openMenu);
         $input.on('input', function () {
-            // 搜索过程中不保留旧 value；必须由用户确认合法候选项。
-            $value.val('');
+            // 用户编辑输入框：清除已确认的候选项选中状态。
+            // allow_custom=false（默认）：清空 value，必须点选候选项才能提交。
+            // allow_custom=true：将当前输入文字同步到 value，允许提交自定义值。
             $menu.find('[aria-selected="true"]').attr('aria-selected', 'false');
+            if (allowCustom) {
+                // P1-1: allow_custom=true 时输入文字即为提交值（原确认选中的 value 立即失效）。
+                $value.val($input.val());
+            } else {
+                $value.val('');
+            }
             openMenu();
         });
         $input.on('keydown', function (event) {
@@ -359,12 +369,25 @@ function testConnection() {
     });
 }
 
+/**
+ * P1-1: 从 searchable-select 组件解析最终提交值。
+ *   - 已点选候选项：返回 option.data-value（如 DoctorID），不是显示文字。
+ *   - allow_custom=true + 仅输入未点选：返回输入文字（已由 input 事件同步到 value 字段）。
+ *   - allow_custom=false + 仅输入未点选：返回 ''（严格模式，拒绝未确认的搜索文字）。
+ * 此函数逻辑可独立测试（参见 test_web_integration.py 中的合约断言）。
+ */
+function resolveSearchableSelectValue($root) {
+    return $root.find('.searchable-select-value').val() || '';
+}
+
 function collectParams() {
     var params = {};
     $('.param-input').each(function () {
         var $input = $(this);
         var name = $input.data('name');
         if (!name) return;
+        // searchable-select-value 已通过 initializeSearchableSelects 维护正确的提交值，
+        // 直接收集即可（allow_custom 语义在组件内部处理）。
         if ($input.is(':radio')) {
             if ($input.is(':checked')) params[name] = $input.val() || '';
         } else if ($input.is(':checkbox')) {
@@ -384,9 +407,12 @@ function validateRequiredParams() {
             return false;
         }
     });
+    // P1-1: required 校验使用 resolveSearchableSelectValue，
+    //   allow_custom=true 时自定义非空输入满足 required；
+    //   allow_custom=false 时必须真正点选候选项（value 才非空）。
     $('.searchable-select[data-required="1"]').each(function () {
         var $root = $(this);
-        if (!$root.find('.searchable-select-value').val()) {
+        if (!resolveSearchableSelectValue($root)) {
             valid = false;
             $root.find('.searchable-select-input').trigger('focus');
             return false;

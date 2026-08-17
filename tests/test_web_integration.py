@@ -289,6 +289,14 @@ SELECT '{keyword}' AS Keyword
         self.assertFalse(FormParser.is_safe_sql('INSERT INTO T VALUES (1)', 'select')[0])
         self.assertTrue(FormParser.is_safe_sql('EXEC dbo.usp_Test @P=1', 'exec')[0])
         self.assertFalse(FormParser.is_safe_sql('EXEC dbo.usp_Test; DELETE FROM T', 'exec')[0])
+        # P0-1 回归：SELECT INTO 各种标识符形式应全部被拒绝。
+        self.assertFalse(FormParser.is_safe_sql('SELECT 1 INTO [DBQuery_Options_Test]', 'select')[0])
+        self.assertFalse(FormParser.is_safe_sql('SELECT 1 INTO #DBQuery_Options_Test', 'select')[0])
+        self.assertFalse(FormParser.is_safe_sql('SELECT 1 INTO ##DBQuery_Options_Test', 'select')[0])
+        self.assertFalse(FormParser.is_safe_sql('SELECT 1 INTO [dbo].[DBQuery_Options_Test]', 'select')[0])
+        self.assertFalse(FormParser.is_safe_sql('SELECT 1 INTO dbo.T', 'select')[0])
+        # 常规 SELECT 不受影响。
+        self.assertEqual(FormParser.is_safe_sql('SELECT ID, Name FROM Doctor', 'select'), (True, 'OK'))
 
     def test_system_form_casts_extended_property_to_text_for_odbc(self):
         root_dir = os.path.dirname(os.path.dirname(__file__))
@@ -303,6 +311,30 @@ SELECT '{keyword}' AS Keyword
         with open(js_path, 'r', encoding='utf-8') as js_file:
             source = js_file.read()
         self.assertIn("params[name] = $input.is(':checked') ? '1' : '0';", source)
+
+    def test_app_js_allow_custom_contracts(self):
+        """P1-1 验收：断言 app.js 已实现 allow_custom 行为关键合约。"""
+        js_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static', 'js', 'app.js')
+        with open(js_path, 'r', encoding='utf-8') as js_file:
+            source = js_file.read()
+        # 1. 读取 data-allow-custom 标志。
+        self.assertIn("data-allow-custom", source,
+                      'app.js 应读取 data-allow-custom 属性')
+        # 2. allow_custom=true 时，输入文字同步到 value 字段（即自定义值可被提交）。
+        self.assertIn("$value.val($input.val())", source,
+                      'allow_custom=true 时应将输入文字同步到 value')
+        # 3. allow_custom=false 时仍清空 value（严格模式）。
+        self.assertIn("$value.val('')", source,
+                      'allow_custom=false 时应清空 value')
+        # 4. 提供可测试的 resolveSearchableSelectValue 函数。
+        self.assertIn("function resolveSearchableSelectValue", source,
+                      '应提取 resolveSearchableSelectValue 可测试函数')
+        # 5. 点选候选项时提交 data-value（如 DoctorID）而不是显示文字。
+        self.assertIn("$value.val($option.data('value'))", source,
+                      '点选候选项时应提交 option.data-value')
+        # 6. required 校验使用 resolveSearchableSelectValue。
+        self.assertIn("resolveSearchableSelectValue($root)", source,
+                      'validateRequiredParams 应使用 resolveSearchableSelectValue')
 
 
 class SuccessfulManager:
@@ -430,6 +462,41 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn('.xlsx', disposition)
         self.assertNotIn('export.xlsx', disposition)
         response.close()
+
+    def test_allow_custom_false_rejects_unconfirmed_value_via_web_route(self):
+        """P1-1 服务端校验：allow_custom=false 时未点选的值应被拒绝。"""
+        form = QueryForm()
+        form.query_type = 'select'
+        form.sql = "SELECT '{doctor}'"
+        form.params = [QueryParam('doctor', '医生', 'select', ['全部', '内科'],
+                                   allow_custom=False)]
+        with patch('web_server.get_form_from_path', return_value=(form, 'forms/test.qry', '/tmp/test.qry')):
+            response = self.client.post('/api/query', json={
+                'file_path': 'forms/test.qry',
+                'params': {'doctor': '未知科室'}
+            })
+        self.assertEqual(response.status_code, 400,
+                         'allow_custom=false + 未知值应返回 400')
+
+    def test_allow_custom_true_accepts_custom_value_via_web_route(self):
+        """P1-1 服务端校验：allow_custom=true 时自定义值应被接受并完成查询。"""
+        manager = type('M', (), {
+            'get_web_config': lambda self: {'query_timeout': 60, 'max_rows': 5000},
+            'execute_query_limited': lambda self, sql, **kw: (['r'], [['x']], False),
+        })()
+        form = QueryForm()
+        form.query_type = 'select'
+        form.sql = "SELECT '{doctor}'"
+        form.params = [QueryParam('doctor', '医生', 'select', ['全部'],
+                                   allow_custom=True)]
+        with patch('web_server.get_form_from_path', return_value=(form, 'forms/test.qry', '/tmp/test.qry')), \
+             patch('web_server.DBManager', return_value=manager):
+            response = self.client.post('/api/query', json={
+                'file_path': 'forms/test.qry',
+                'params': {'doctor': '自定义医生名'}
+            })
+        self.assertEqual(response.status_code, 200,
+                         'allow_custom=true + 自定义值应返回 200')
 
 
 class ExcelCopyTests(unittest.TestCase):

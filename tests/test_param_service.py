@@ -163,6 +163,42 @@ SELECT 1
         self.assertFalse(validate_options_sql('SELECT 1; DELETE FROM Employee')[0])
         self.assertFalse(validate_options_sql('EXEC dbo.usp_ListDoctors')[0])
 
+    def test_options_sql_rejects_select_into_all_identifier_forms(self):
+        """P0-1 验收：INTO 各种 SQL Server 标识符形式应全部被拒绝。"""
+        bad_sqls = [
+            # 要求内指定的必须拒绝的形式
+            'SELECT 1 INTO [DBQuery_Options_Test]',
+            'SELECT 1 INTO #DBQuery_Options_Test',
+            'SELECT 1 INTO ##DBQuery_Options_Test',
+            'SELECT 1 INTO [dbo].[DBQuery_Options_Test]',
+            # 普通标识符 / schema.table
+            'SELECT 1 INTO TableName',
+            'SELECT 1 INTO dbo.TableName',
+            # 大小写变化
+            'select 1 into #tmp',
+            'SELECT 1 INTO [Schema].[Table]',
+            # 多余空白 / 换行
+            'SELECT 1\nINTO  [AnotherTable]',
+            'SELECT  1  INTO  ##GlobalTemp',
+        ]
+        for sql in bad_sqls:
+            ok, reason = validate_options_sql(sql)
+            self.assertFalse(ok, msg='\u5e94拒绝但通过： ' + repr(sql))
+
+    def test_options_sql_normal_select_still_passes_after_into_fix(self):
+        """P0-1 回归：合法 SELECT 不应受影响。"""
+        good_sqls = [
+            'SELECT ID, Name FROM Doctor',
+            'SELECT ID, Name FROM Doctor WHERE Enabled=1 ORDER BY Name',
+            'SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL',
+            # INTO 出现在列别名/字层中不应被误弹：
+            # （正常 SQL 不会在字段列表后接 INTO，这里主要验证基础语法）
+            'SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS Flag FROM T',
+        ]
+        for sql in good_sqls:
+            ok, reason = validate_options_sql(sql)
+            self.assertTrue(ok, msg='\u5e94通过但被拒绝（' + reason + '\uff09： ' + repr(sql))
+
     def test_unknown_or_unresolved_sql_placeholders_raise_configuration_error(self):
         form = QueryForm()
         form.params = [QueryParam('known', '已知参数')]

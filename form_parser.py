@@ -268,8 +268,16 @@ class FormParser:
         if not tokens or tokens[0].upper() != 'SELECT':
             return False, 'SQL必须以 SELECT 开头，本工具仅允许查询操作'
 
+        # 先检测 SELECT INTO（所有 SQL Server 标识符形式）：
+        #   INTO TableName / INTO dbo.TableName / INTO [TableName] / INTO [dbo].[TableName]
+        #   INTO #TempTable / INTO ##GlobalTempTable
+        # 匹配规则：INTO 后（忽略空白）紧跟 #、[ 或普通标识符首字符 \w 即为 SELECT INTO。
+        into_match = re.search(r'\bINTO\s+(?:[#\[]|\w)', clean, re.IGNORECASE)
+        if into_match:
+            return False, 'SQL 包含禁止的 SELECT INTO（禁止写入操作）'
+
         blocked = (
-            r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|XP_|SP_EXECUTESQL|INTO\s+\w+)\b'
+            r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE|XP_|SP_EXECUTESQL)\b'
         )
         match = re.search(blocked, clean, re.IGNORECASE)
         if match:
