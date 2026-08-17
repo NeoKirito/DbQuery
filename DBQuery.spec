@@ -70,7 +70,8 @@ a = Analysis(
     pathex=['.'],
     binaries=ucrt_binaries,   # <── 关键：把 UCRT DLL 打进包
     datas=[
-        ('forms', 'forms'),
+        # 随包表单仅作为首次运行样例；运行时 forms 存在则绝不覆盖。
+        ('forms', 'defaults/forms'),
         ('templates', 'templates'),
         ('static', 'static'),
     ],

@@ -179,6 +179,31 @@ class QueryExecutionBehaviorTests(unittest.TestCase):
         self.assertEqual(rows, [[1], [2], [3]])
         self.assertTrue(connection.closed)
 
+    def test_desktop_exec_and_timeout_do_not_retry(self):
+        class TestPyodbcError(Exception):
+            pass
+
+        for query_type, error in (
+            ('exec', TestPyodbcError(('08S01', 'Communication link failure'))),
+            ('select', TestPyodbcError(('HYT00', 'Query timeout expired'))),
+        ):
+            manager = DBManager.__new__(DBManager)
+            connection = self.FakeConnection()
+            manager._open_connection = lambda: connection
+            calls = []
+
+            def run_query(conn, sql):
+                calls.append(conn)
+                raise error
+
+            manager._run_unlimited_query = run_query
+            with patch.object(db_manager_module.pyodbc, 'Error', TestPyodbcError):
+                expected = TestPyodbcError if query_type == 'exec' else QueryTimeoutError
+                with self.assertRaises(expected):
+                    manager.execute_query('EXEC dbo.usp_Report', query_type=query_type)
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(connection.closed)
+
 
 class FormParserCompatibilityTests(unittest.TestCase):
     def parse_content(self, content):

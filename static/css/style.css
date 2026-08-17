@@ -331,6 +331,37 @@ body.embed-mode { height: 100vh; min-height: 0; background: var(--peis-bg-panel)
 .radio-control input { width: 14px; height: 14px; margin: 0; accent-color: var(--peis-primary); }
 .radio-group { display: flex; flex-wrap: wrap; gap: 10px; min-height: 29px; }
 
+/* 轻量可搜索下拉：浮层绝对定位，不参与嵌入 iframe 的横向布局。 */
+.searchable-select { position: relative; width: 100%; min-width: 0; }
+.searchable-select-control { position: relative; display: flex; width: 100%; }
+.searchable-select-input {
+    width: 100%; height: 28px; min-width: 0; padding: 3px 27px 3px 7px;
+    color: var(--peis-text); border: 1px solid #c4d1dc; border-radius: 3px;
+    background: #fff; font-size: 12px; outline: none;
+}
+.searchable-select-input:focus { border-color: var(--peis-primary); box-shadow: 0 0 0 1px #d9e9f5; }
+.searchable-select-toggle {
+    position: absolute; top: 1px; right: 1px; width: 25px; height: 26px;
+    padding: 0; border: 0; background: transparent; color: #617588; cursor: pointer;
+}
+.searchable-select-menu {
+    position: absolute; z-index: 30; top: calc(100% + 2px); left: 0; right: 0;
+    max-height: 208px; overflow-y: auto; overflow-x: hidden; padding: 3px;
+    border: 1px solid #b8c9d6; border-radius: 3px; background: #fff;
+    box-shadow: 0 5px 14px rgba(35, 61, 82, .18); box-sizing: border-box;
+}
+.searchable-select-menu[hidden] { display: none; }
+.searchable-select-option {
+    display: block; width: 100%; min-height: 27px; padding: 4px 7px; overflow: hidden;
+    color: #334a5d; border: 0; border-radius: 2px; background: #fff; text-align: left;
+    text-overflow: ellipsis; white-space: nowrap; cursor: pointer; font-size: 12px;
+}
+.searchable-select-option:hover,
+.searchable-select-option.is-active { color: #113f63; background: #e7f2fb; }
+.searchable-select-option[aria-selected="true"] { color: #fff; background: var(--peis-primary); }
+.searchable-select-option[aria-selected="true"].is-active { background: #155d92; }
+.searchable-select-value { display: none; }
+
 .action-bar {
     display: flex;
     flex: 0 0 auto;

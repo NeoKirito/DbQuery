@@ -26,6 +26,10 @@ sys.path.insert(0, BASE_DIR)
 from db_manager import DBManager, QueryTimeoutError
 from form_parser import FormParser
 from core.query_service import build_final_sql, export_to_excel, load_all_forms, serialize_form
+from core.param_service import (
+    OptionsLoadError, ParameterError, RequiredParameterError, load_options,
+    normalize_params, static_options
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -79,10 +83,15 @@ def error_response(message, status=500, error_type=None):
 
 
 def get_form_from_path(file_path):
-    """加载并解析请求指定的表单，保持既有相对路径约定。"""
-    decoded_path = unquote(file_path or '')
-    abs_path = os.path.join(BASE_DIR, decoded_path)
-    if not os.path.isfile(abs_path):
+    """仅加载 forms 目录内的 .qry，拒绝路径穿越和非表单文件。"""
+    decoded_path = unquote(file_path or '').replace('\\', '/')
+    abs_path = os.path.realpath(os.path.join(BASE_DIR, decoded_path))
+    forms_root = os.path.realpath(FORMS_DIR)
+    try:
+        is_form_path = os.path.commonpath([forms_root, abs_path]) == forms_root
+    except ValueError:
+        is_form_path = False
+    if not is_form_path or not abs_path.lower().endswith('.qry') or not os.path.isfile(abs_path):
         return None, decoded_path, None
     return FormParser.parse_file(abs_path), decoded_path, abs_path
 
@@ -98,18 +107,20 @@ def normalize_rows(rows):
     return safe_rows
 
 
-def has_missing_required_params(form, params):
-    """在服务端重复执行必填校验，防止绕过浏览器端校验。"""
+def form_options(form, db_manager):
+    """加载当前表单所有 select 的 value/label 候选，失败时保留静态项。"""
+    options_by_name = {}
+    warnings = []
     for param in form.params:
-        if not param.required:
+        if param.ptype != 'select':
             continue
-        value = params.get(param.name)
-        if param.ptype == 'checkbox':
-            if str(value or '') != '1':
-                return True
-        elif value is None or not str(value).strip():
-            return True
-    return False
+        try:
+            options_by_name[param.name] = load_options(param, db_manager)
+        except OptionsLoadError:
+            logger.exception('查询前加载动态候选失败: %s', param.name)
+            options_by_name[param.name] = static_options(param)
+            warnings.append(param.name)
+    return options_by_name, warnings
 
 
 @app.route('/')
@@ -146,6 +157,37 @@ def api_forms():
     return jsonify(load_all_forms(FORMS_DIR))
 
 
+@app.route('/api/options', methods=['POST'])
+def api_options():
+    """按表单路径和参数名加载配置中的候选项，绝不接收客户端 SQL。"""
+    data = request.get_json(silent=True) or {}
+    file_path = data.get('file_path', '')
+    param_name = data.get('param_name', '')
+    if not isinstance(param_name, str) or not param_name:
+        return error_response('查询条件信息不完整，请重新操作。', 400)
+
+    try:
+        form, decoded_path, _ = get_form_from_path(file_path)
+    except Exception:
+        logger.exception('候选项表单解析失败: %s', file_path)
+        return error_response('查询配置加载失败，请联系管理员。', 500)
+    if form is None:
+        return error_response('查询方案不存在或已停用。', 404)
+
+    param = next((item for item in form.params if item.name == param_name), None)
+    if param is None or param.ptype != 'select':
+        return error_response('查询条件不存在或不支持候选项加载。', 404)
+
+    fallback = static_options(param)
+    try:
+        options = load_options(param, DBManager())
+        return jsonify({'options': options, 'warning': ''})
+    except OptionsLoadError:
+        logger.exception('动态候选加载失败: %s / %s', decoded_path, param_name)
+        # 静态项可继续工作；不给浏览器泄露数据库异常。
+        return jsonify({'options': fallback, 'warning': '候选数据加载失败，可刷新重试。'})
+
+
 @app.route('/api/test-connection')
 def api_test_connection():
     """使用独立连接测试数据库连通性。"""
@@ -177,12 +219,18 @@ def api_query():
         return error_response('查询配置加载失败，请联系管理员。', 500)
     if form is None:
         return error_response('查询方案不存在或已停用。', 404)
-    if has_missing_required_params(form, params):
-        return error_response('请填写完整的查询条件。', 400)
 
     try:
-        sql = build_final_sql(form, params)
-    except Exception as exc:
+        db_manager = DBManager()
+        options_by_name, option_warnings = form_options(form, db_manager)
+        normalized_params = normalize_params(form, params, options_by_name=options_by_name)
+        sql = build_final_sql(form, normalized_params, already_normalized=True)
+    except RequiredParameterError:
+        # 保留既有 Web API 的业务提示，前端和历史集成方均可兼容。
+        return error_response('请填写完整的查询条件。', 400)
+    except ParameterError as exc:
+        return error_response(str(exc), 400)
+    except Exception:
         logger.exception('查询条件处理失败: %s', decoded_path)
         return error_response('查询条件处理失败，请联系管理员。', 500)
 
@@ -192,7 +240,6 @@ def api_query():
         logger.warning('查询配置未通过安全检查: %s; 原因: %s', decoded_path, reason)
         return error_response('当前查询配置无法执行，请联系管理员。', 400)
 
-    db_manager = DBManager()
     web_config = db_manager.get_web_config()
     started_at = time.monotonic()
     try:
@@ -219,6 +266,7 @@ def api_query():
         'col_count': len(columns),
         'truncated': truncated,
         'max_rows': web_config['max_rows'],
+        'option_warnings': option_warnings,
     })
 
 
@@ -249,9 +297,10 @@ def api_export():
         if form is not None:
             form_title = form.title
             form_desc = form.description
-            final_sql = build_final_sql(form, params)
+            normalized_params = normalize_params(form, params)
+            final_sql = build_final_sql(form, normalized_params, already_normalized=True)
             params_info = [
-                (param.label, params.get(param.name, ''))
+                (param.label, normalized_params.get(param.name, ''))
                 for param in form.params
             ]
     except Exception:

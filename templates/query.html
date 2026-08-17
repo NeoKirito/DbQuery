@@ -59,15 +59,24 @@
                         {% if p.ptype == 'date' %}
                         <input id="param-{{ loop.index }}" type="date" class="param-input" data-name="{{ p.name }}" data-default="{{ p.default }}" value="{{ p.default|replace('{today}', '') }}"{% if p.placeholder %} placeholder="{{ p.placeholder }}"{% endif %}{% if p.required %} required{% endif %}>
                         {% elif p.ptype == 'datetime' %}
-                        <input id="param-{{ loop.index }}" type="datetime-local" class="param-input" data-name="{{ p.name }}" data-default="{{ p.default }}"{% if p.placeholder %} placeholder="{{ p.placeholder }}"{% endif %}{% if p.required %} required{% endif %}>
+                        <input id="param-{{ loop.index }}" type="datetime-local" step="1" class="param-input" data-name="{{ p.name }}" data-default="{{ p.default }}" value="{{ p.default|replace(' ', 'T') }}"{% if p.placeholder %} placeholder="{{ p.placeholder }}"{% endif %}{% if p.required %} required{% endif %}>
                         {% elif p.ptype == 'number' %}
                         <input id="param-{{ loop.index }}" type="number" class="param-input" data-name="{{ p.name }}" value="{{ p.default }}" placeholder="{{ p.placeholder or '请输入数字' }}"{% if p.required %} required{% endif %}>
                         {% elif p.ptype == 'select' %}
-                        <select id="param-{{ loop.index }}" class="param-input" data-name="{{ p.name }}"{% if p.required %} required{% endif %}>
-                            {% for opt in p.options %}
-                            <option value="{{ opt }}" {{ 'selected' if opt == p.default else '' }}>{{ opt }}</option>
-                            {% endfor %}
-                        </select>
+                        <div class="searchable-select" data-name="{{ p.name }}" data-required="{{ '1' if p.required else '0' }}" data-allow-custom="{{ '1' if p.allow_custom else '0' }}">
+                            <div class="searchable-select-control">
+                                <input id="param-{{ loop.index }}" type="text" class="searchable-select-input" autocomplete="off"
+                                       role="combobox" aria-autocomplete="list" aria-expanded="false"
+                                       aria-controls="param-options-{{ loop.index }}" placeholder="{{ p.placeholder or '输入关键字筛选' }}">
+                                <button type="button" class="searchable-select-toggle" tabindex="-1" aria-label="展开候选项">▾</button>
+                            </div>
+                            <input type="hidden" class="param-input searchable-select-value" data-name="{{ p.name }}" value="{{ p.default }}">
+                            <div id="param-options-{{ loop.index }}" class="searchable-select-menu" role="listbox" hidden>
+                                {% for opt in p.option_items %}
+                                <button type="button" class="searchable-select-option" role="option" data-value="{{ opt.value }}" aria-selected="{{ 'true' if opt.value == p.default else 'false' }}">{{ opt.label }}</button>
+                                {% endfor %}
+                            </div>
+                        </div>
                         {% elif p.ptype == 'textarea' %}
                         <textarea id="param-{{ loop.index }}" class="param-input param-textarea" data-name="{{ p.name }}" placeholder="{{ p.placeholder or p.label }}"{% if p.required %} required{% endif %}>{{ p.default|replace('{today}', '') }}</textarea>
                         {% elif p.ptype == 'checkbox' %}
@@ -77,10 +86,10 @@
                         </label>
                         {% elif p.ptype == 'radio' %}
                         <div class="radio-group" id="param-{{ loop.index }}">
-                            {% for opt in p.options %}
+                            {% for opt in p.option_items %}
                             <label class="radio-control">
-                                <input type="radio" class="param-input" data-name="{{ p.name }}" value="{{ opt }}" {{ 'checked' if opt == p.default else '' }}{% if p.required and loop.first %} required{% endif %}>
-                                <span>{{ opt }}</span>
+                                <input type="radio" class="param-input" data-name="{{ p.name }}" value="{{ opt.value }}" {{ 'checked' if opt.value == p.default else '' }}{% if p.required and loop.first %} required{% endif %}>
+                                <span>{{ opt.label }}</span>
                             </label>
                             {% endfor %}
                         </div>

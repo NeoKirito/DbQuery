@@ -16,16 +16,22 @@ from PyQt5.QtWidgets import (
     QLineEdit, QDateEdit, QDateTimeEdit, QComboBox, QGroupBox,
     QTableView, QHeaderView, QAbstractItemView,
     QFileDialog, QMessageBox, QProgressBar, QScrollArea,
-    QApplication, QMenu, QFrame
+    QApplication, QMenu, QFrame, QPlainTextEdit, QCheckBox,
+    QRadioButton, QButtonGroup, QCompleter
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal,
     QAbstractTableModel, QModelIndex, QDate, QDateTime
 )
-from PyQt5.QtGui import QColor, QBrush
+from PyQt5.QtGui import QColor, QBrush, QDoubleValidator
 
+from db_manager import DBManager
 from form_parser import FormParser
-from core.query_service import escape_sql_param, build_final_sql, export_to_excel
+from core.param_service import (
+    OptionsLoadError, ParameterError, RequiredParameterError, load_options,
+    merge_options, normalize_params, resolve_default, static_options
+)
+from core.query_service import build_final_sql, export_to_excel
 
 
 # ──────────────────────────────────────────────
@@ -156,10 +162,11 @@ class QueryWorker(QThread):
     query_error     = pyqtSignal(str)
     query_cancelled = pyqtSignal()
 
-    def __init__(self, db_manager, sql):
+    def __init__(self, db_manager, sql, query_type='select'):
         super(QueryWorker, self).__init__()
         self.db_manager = db_manager
         self.sql        = sql
+        self.query_type = query_type
         self._cancelled = False
 
     def cancel(self):
@@ -169,7 +176,7 @@ class QueryWorker(QThread):
     def run(self):
         logger.info("QueryWorker started, sql: %s", self.sql[:100] if self.sql else "EMPTY")
         try:
-            columns, rows = self.db_manager.execute_query(self.sql)
+            columns, rows = self.db_manager.execute_query(self.sql, self.query_type)
             if self._cancelled:
                 logger.info("QueryWorker cancelled after query, discarding results")
                 self.query_cancelled.emit()
@@ -183,6 +190,27 @@ class QueryWorker(QThread):
             logger.error("QueryWorker error: %s", str(e))
             logger.error(traceback.format_exc())
             self.query_error.emit(str(e))
+
+
+# ──────────────────────────────────────────────
+#  动态候选项加载线程
+# ──────────────────────────────────────────────
+class OptionsWorker(QThread):
+    options_ready = pyqtSignal(str, list)
+    options_error = pyqtSignal(str)
+
+    def __init__(self, param):
+        super(OptionsWorker, self).__init__()
+        self.param = param
+
+    def run(self):
+        try:
+            # 每次加载使用独立 DBManager 和短生命周期连接，不共享 UI 查询连接。
+            options = load_options(self.param, DBManager())
+            self.options_ready.emit(self.param.name, options)
+        except OptionsLoadError:
+            logger.exception('桌面端动态候选加载失败: %s', self.param.name)
+            self.options_error.emit(self.param.name)
 
 
 # ──────────────────────────────────────────────
@@ -231,7 +259,10 @@ class QueryTab(QWidget):
         self.form        = form
         self.db_manager  = db_manager
         self.forms_dir   = forms_dir
-        self._param_widgets  = {}   # {param_name: QWidget}
+        self._param_widgets  = {}   # {param_name: QWidget 或 QButtonGroup}
+        self._param_defs     = {param.name: param for param in form.params}
+        self._param_options  = {}   # {param_name: [{value, label}, ...]}
+        self._option_workers = []
         self._worker         = None
         self._last_columns   = []
         self._last_rows      = []
@@ -362,63 +393,163 @@ class QueryTab(QWidget):
         root.addLayout(filter_row)
 
     def _build_param_widgets(self, layout):
-        today = QDate.currentDate()
-
         for param in self.form.params:
+            # hidden 参数只保留在公共服务中，不创建可见控件。
+            if param.ptype == 'hidden':
+                self._param_widgets[param.name] = None
+                continue
+
             lbl = QLabel(param.label + u":")
             lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            default = resolve_default(param)
 
             if param.ptype == 'date':
                 w = QDateEdit()
                 w.setCalendarPopup(True)
                 w.setDisplayFormat("yyyy-MM-dd")
-                if param.default == '{today}':
-                    w.setDate(today)
-                elif param.default:
-                    d = QDate.fromString(param.default, "yyyy-MM-dd")
-                    w.setDate(d if d.isValid() else today)
-                else:
-                    w.setDate(today)
+                self._set_date_control_value(w, default, is_datetime=False)
                 w.setMinimumWidth(110)
 
             elif param.ptype == 'datetime':
                 w = QDateTimeEdit()
                 w.setCalendarPopup(True)
                 w.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-                w.setDateTime(QDateTime.currentDateTime())
-                w.setMinimumWidth(160)
+                self._set_date_control_value(w, default, is_datetime=True)
+                w.setMinimumWidth(170)
 
             elif param.ptype == 'number':
                 w = QLineEdit()
-                w.setPlaceholderText(u"数字")
-                w.setText(param.default)
-                w.setMaximumWidth(100)
+                w.setPlaceholderText(param.placeholder or u"请输入数字")
+                w.setText(default)
+                validator = QDoubleValidator(w)
+                validator.setNotation(QDoubleValidator.StandardNotation)
+                w.setValidator(validator)
+                w.setMaximumWidth(120)
+                w.returnPressed.connect(self._execute_query)
 
             elif param.ptype == 'select':
-                w = QComboBox()
-                w.addItems(param.options)
-                if param.default in param.options:
-                    w.setCurrentText(param.default)
-                w.setMinimumWidth(100)
+                w = self._create_searchable_combo(param)
+                self._param_options[param.name] = static_options(param)
+                self._set_combo_options(w, self._param_options[param.name], default)
+                if param.options_sql:
+                    self._load_dynamic_options(param)
 
-            else:  # text
+            elif param.ptype == 'textarea':
+                w = QPlainTextEdit()
+                w.setPlaceholderText(param.placeholder or param.label)
+                w.setPlainText(default)
+                w.setMinimumWidth(160)
+                w.setFixedHeight(54)
+
+            elif param.ptype == 'checkbox':
+                w = QCheckBox(u"是")
+                w.setChecked(default.strip().lower() in ('1', 'true', 'yes', 'on', '是'))
+
+            elif param.ptype == 'radio':
+                group_widget = QWidget()
+                radio_layout = QHBoxLayout(group_widget)
+                radio_layout.setContentsMargins(0, 0, 0, 0)
+                radio_layout.setSpacing(8)
+                w = QButtonGroup(group_widget)
+                for index, option in enumerate(static_options(param)):
+                    radio = QRadioButton(option['label'])
+                    radio.setProperty('param_value', option['value'])
+                    radio.setChecked(option['value'] == default)
+                    w.addButton(radio, index)
+                    radio_layout.addWidget(radio)
+                radio_layout.addStretch()
+                display_widget = group_widget
+
+            else:
                 w = QLineEdit()
-                w.setPlaceholderText(param.label)
-                w.setText(param.default if param.default != '{today}' else '')
+                w.setPlaceholderText(param.placeholder or param.label)
+                w.setText(default)
                 w.setMinimumWidth(120)
                 w.returnPressed.connect(self._execute_query)
 
             self._param_widgets[param.name] = w
+            if param.ptype != 'radio':
+                display_widget = w
 
             pair = QHBoxLayout()
             pair.setSpacing(4)
             pair.addWidget(lbl)
-            pair.addWidget(w)
+            pair.addWidget(display_widget)
             container = QWidget()
             container.setLayout(pair)
             layout.addWidget(container)
 
         layout.addStretch()
+
+    def _set_date_control_value(self, widget, value, is_datetime=False):
+        """让空默认值在 QDate(Edit/TimeEdit) 中保持为空，而不是隐式变成今天。"""
+        minimum = QDate(1752, 9, 14)
+        widget.setMinimumDate(minimum)
+        widget.setSpecialValueText('')
+        widget.setProperty('empty_date_value', minimum.toString('yyyy-MM-dd'))
+        if is_datetime:
+            parsed = QDateTime.fromString(value, 'yyyy-MM-dd HH:mm:ss')
+            widget.setMinimumDateTime(QDateTime(minimum, QDateTime.currentDateTime().time()))
+            widget.setDateTime(parsed if parsed.isValid() else QDateTime(minimum, QDateTime.currentDateTime().time()))
+        else:
+            parsed = QDate.fromString(value, 'yyyy-MM-dd')
+            widget.setDate(parsed if parsed.isValid() else minimum)
+
+    def _create_searchable_combo(self, param):
+        """创建标签搜索、value 提交的不可自由录入下拉框。"""
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.setInsertPolicy(QComboBox.NoInsert)
+        combo.setMinimumWidth(130)
+        combo.lineEdit().setPlaceholderText(param.placeholder or u"输入关键字筛选")
+        completer = QCompleter(combo.model(), combo)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.PopupCompletion)
+        combo.setCompleter(completer)
+        combo.lineEdit().returnPressed.connect(self._execute_query)
+        return combo
+
+    def _set_combo_options(self, combo, options, preferred_value=''):
+        """按 value/label 写入 QComboBox，保留已选 value 或 .qry 默认值。"""
+        existing_value = combo.currentData(Qt.UserRole)
+        target_value = existing_value or preferred_value
+        combo.blockSignals(True)
+        combo.clear()
+        for option in merge_options(options):
+            combo.addItem(option['label'], option['value'])
+        index = combo.findData(target_value, Qt.UserRole)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        elif combo.count():
+            combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+
+    def _load_dynamic_options(self, param):
+        worker = OptionsWorker(param)
+        worker.options_ready.connect(self._on_options_ready)
+        worker.options_error.connect(self._on_options_error)
+        worker.finished.connect(lambda worker=worker: self._release_option_worker(worker))
+        self._option_workers.append(worker)
+        worker.start()
+
+    def _release_option_worker(self, worker):
+        if worker in self._option_workers:
+            self._option_workers.remove(worker)
+        worker.deleteLater()
+
+    def _on_options_ready(self, param_name, dynamic_options):
+        param = self._param_defs.get(param_name)
+        combo = self._param_widgets.get(param_name)
+        if param is None or not isinstance(combo, QComboBox):
+            return
+        self._param_options[param_name] = merge_options(static_options(param), dynamic_options)
+        self._set_combo_options(combo, self._param_options[param_name], resolve_default(param))
+
+    def _on_options_error(self, param_name):
+        # 静态项已在表单构建时展示，动态失败仅给业务提示，不显示数据库堆栈。
+        if hasattr(self, 'status_lbl'):
+            self.status_lbl.setText(u"候选数据加载失败，可刷新重试")
 
     # ── Worker 清理辅助 ──────────────────────
     def _cancel_worker(self):
@@ -446,22 +577,51 @@ class QueryTab(QWidget):
 
     # ── 参数值获取 ────────────────────────────
     def _get_param_values(self):
+        """仅采集控件原始值；类型规则统一交给 core.param_service。"""
         vals = {}
         for name, w in self._param_widgets.items():
             if isinstance(w, QDateTimeEdit) and not isinstance(w, QDateEdit):
-                vals[name] = w.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+                date_text = w.date().toString("yyyy-MM-dd")
+                vals[name] = '' if date_text == w.property('empty_date_value') else w.dateTime().toString("yyyy-MM-dd HH:mm:ss")
             elif isinstance(w, QDateEdit):
-                vals[name] = w.date().toString("yyyy-MM-dd")
+                date_text = w.date().toString("yyyy-MM-dd")
+                vals[name] = '' if date_text == w.property('empty_date_value') else date_text
             elif isinstance(w, QComboBox):
-                vals[name] = w.currentText()
+                text = w.currentText()
+                index = w.currentIndex()
+                # 只有标签仍与真实候选相符时提交其 value；否则交给服务拒绝临时搜索词。
+                if index >= 0 and text == w.itemText(index):
+                    vals[name] = w.itemData(index, Qt.UserRole)
+                else:
+                    vals[name] = text
+            elif isinstance(w, QPlainTextEdit):
+                vals[name] = w.toPlainText()
+            elif isinstance(w, QCheckBox):
+                vals[name] = '1' if w.isChecked() else '0'
+            elif isinstance(w, QButtonGroup):
+                selected = w.checkedButton()
+                vals[name] = selected.property('param_value') if selected else ''
             elif isinstance(w, QLineEdit):
                 vals[name] = w.text()
             else:
-                vals[name] = ''
+                vals[name] = None
         return vals
 
+    def _normalized_param_values(self):
+        return normalize_params(
+            self.form, self._get_param_values(), options_by_name=self._param_options
+        )
+
     def _build_final_sql(self):
-        return build_final_sql(self.form, self._get_param_values())
+        normalized = self._normalized_param_values()
+        return build_final_sql(self.form, normalized, already_normalized=True)
+
+    def _focus_param(self, param_name):
+        widget = self._param_widgets.get(param_name)
+        if isinstance(widget, QButtonGroup):
+            widget = widget.checkedButton() or (widget.buttons()[0] if widget.buttons() else None)
+        if widget is not None:
+            widget.setFocus()
 
     # ── 执行查询 ──────────────────────────────
     def _execute_query(self):
@@ -473,6 +633,13 @@ class QueryTab(QWidget):
         try:
             sql = self._build_final_sql()
             logger.info("Built SQL: %s", sql[:200] if sql else "EMPTY")
+        except RequiredParameterError as exc:
+            self._focus_param(exc.param.name)
+            QMessageBox.warning(self, u"请填写查询条件", str(exc))
+            return
+        except ParameterError as exc:
+            QMessageBox.warning(self, u"查询条件", str(exc))
+            return
         except Exception as e:
             logger.error("Error building SQL: %s", str(e))
             logger.error(traceback.format_exc())
@@ -492,7 +659,7 @@ class QueryTab(QWidget):
         self._query_start = time.time()
 
         try:
-            self._worker = QueryWorker(self.db_manager, sql)
+            self._worker = QueryWorker(self.db_manager, sql, self.form.query_type)
             self._worker.result_ready.connect(self._on_query_done)
             self._worker.query_error.connect(self._on_query_error)
             self._worker.query_cancelled.connect(self._on_query_cancelled)
@@ -640,10 +807,13 @@ class QueryTab(QWidget):
         else:
             export_rows = self._last_rows
 
-        params_info = []
-        param_vals = self._get_param_values()
-        for p in self.form.params:
-            params_info.append((p.label, param_vals.get(p.name, '')))
+        try:
+            param_vals = self._normalized_param_values()
+            final_sql = build_final_sql(self.form, param_vals, already_normalized=True)
+        except ParameterError as exc:
+            QMessageBox.warning(self, u"查询条件", str(exc))
+            return
+        params_info = [(p.label, param_vals.get(p.name, '')) for p in self.form.params]
 
         # 禁用按钮，显示进度
         self.export_btn.setEnabled(False)
@@ -653,7 +823,7 @@ class QueryTab(QWidget):
         self._export_worker = ExportWorker(
             path, self._last_columns, export_rows,
             self.form.title, self.form.description,
-            self._elapsed, params_info, self._build_final_sql()
+            self._elapsed, params_info, final_sql
         )
         self._export_worker.export_done.connect(self._on_export_done)
         self._export_worker.export_error.connect(self._on_export_error)
@@ -742,6 +912,12 @@ class QueryTab(QWidget):
     # ── 窗口关闭事件（清理 worker）─────────────
     def closeEvent(self, event):
         self._cancel_worker()
+        for worker in list(self._option_workers):
+            if worker.isRunning():
+                worker.terminate()
+                worker.wait(1000)
+            worker.deleteLater()
+        self._option_workers = []
         if hasattr(self, '_export_worker') and self._export_worker:
             if self._export_worker.isRunning():
                 self._export_worker.terminate()

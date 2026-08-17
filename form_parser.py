@@ -6,6 +6,7 @@
 """
 import os
 import re
+import shutil
 
 TEMPLATE = u"""\
 [meta]
@@ -22,21 +23,25 @@ description = 查询描述（可选）
 # 支持的类型：
 #   text                    文本输入框
 #   date                    日期选择（YYYY-MM-DD）
-#   datetime                日期时间选择
+#   datetime                日期时间选择（YYYY-MM-DD HH:mm:ss）
 #   number                  数字输入框
-#   select:全部,启用,禁用    下拉选项（逗号分隔）
+#   select:全部,启用,禁用    下拉选项（逗号分隔；提交 option value）
+#   select                  下拉选项可完全由 options_sql 提供
 #   textarea                多行文本
-#   checkbox                复选框（选中值为 1）
-#   radio:男,女              单选项（逗号分隔）
-#   hidden                  隐藏参数
+#   checkbox                复选框（统一提交 1 或 0）
+#   radio:男,女              单选项（提交所选 value）
+#   hidden                  不显示，提交配置中的默认值
 #
 # 可选属性：
 #   placeholder=输入关键字
 #   required
 #   width=220px（或 220、35%、18rem）
+#   searchable              select 开启输入筛选（select 默认可搜索）
+#   allow_custom=true       允许 select/radio 提交候选项外的值（默认 false）
+#   options_sql=SELECT ...  只读动态候选 SQL；一列为 value=label，两列为 value,label
 #
-# 默认值中可用 {today} 代表今日日期。
-# 旧格式仍完全兼容，例如：keyword = 关键词 | text
+# 默认值中可用 {today}：date/text 为 YYYY-MM-DD，datetime 为 YYYY-MM-DD HH:mm:ss。
+# 静态和动态 select 候选按 value 保序合并去重，旧格式仍完全兼容。
 #
 # SELECT 模式示例：
 # start_date = 开始日期 | date | {today} | required | width=150
@@ -45,6 +50,8 @@ description = 查询描述（可选）
 # enabled    = 仅启用 | checkbox | 1
 # gender     = 性别 | radio:全部,男,女 | 全部
 # source     = 来源系统 | hidden | PEIS
+# department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
+# doctor     = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
 #
 # 存储过程模式示例（参数名需与存储过程参数一致）：
 # start_date = 开始日期 | date
@@ -66,15 +73,20 @@ class QueryParam:
     """单个查询参数描述。"""
 
     def __init__(self, name, label, ptype='text', options=None, default='',
-                 placeholder='', required=False, width=''):
+                 placeholder='', required=False, width='', options_sql='',
+                 searchable=False, allow_custom=False):
         self.name = name
         self.label = label
+        # 保持旧版静态候选项为字符串列表，避免破坏既有调用方。
         self.ptype = ptype
         self.options = options or []
         self.default = default
         self.placeholder = placeholder
         self.required = required
         self.width = width
+        self.options_sql = options_sql
+        self.searchable = searchable
+        self.allow_custom = allow_custom
 
 
 class QueryForm:
@@ -108,8 +120,12 @@ class FormParser:
         lower_type = raw_type.lower()
         if lower_type.startswith('select:'):
             return 'select', [item.strip() for item in raw_type.split(':', 1)[1].split(',') if item.strip()]
+        if lower_type == 'select':
+            return 'select', []
         if lower_type.startswith('radio:'):
             return 'radio', [item.strip() for item in raw_type.split(':', 1)[1].split(',') if item.strip()]
+        if lower_type == 'radio':
+            return 'radio', []
         if lower_type in FormParser._BASIC_TYPES:
             return lower_type, []
         return 'text', []
@@ -126,11 +142,14 @@ class FormParser:
 
     @staticmethod
     def _parse_param_attributes(parts):
-        """从默认值之后解析可选属性，容忍未知属性和错误输入。"""
+        """解析属性，保留旧版“首个普通段为默认值”的兼容语义。"""
         default = ''
         placeholder = ''
         required = False
         width = ''
+        options_sql = ''
+        searchable = False
+        allow_custom = False
         default_assigned = False
 
         for raw_part in parts:
@@ -138,6 +157,9 @@ class FormParser:
             lower_token = token.lower()
             if lower_token == 'required':
                 required = True
+                continue
+            if lower_token == 'searchable':
+                searchable = True
                 continue
             if '=' in token:
                 key, value = token.split('=', 1)
@@ -152,11 +174,20 @@ class FormParser:
                 if key == 'width':
                     width = FormParser._normalize_width(value)
                     continue
+                if key == 'options_sql':
+                    options_sql = value
+                    continue
+                if key == 'searchable':
+                    searchable = value.lower() in ('1', 'true', 'yes', 'on', '是')
+                    continue
+                if key == 'allow_custom':
+                    allow_custom = value.lower() in ('1', 'true', 'yes', 'on', '是')
+                    continue
             if not default_assigned:
                 default = token
                 default_assigned = True
 
-        return default, placeholder, required, width
+        return default, placeholder, required, width, options_sql, searchable, allow_custom
 
     @staticmethod
     def parse_file(file_path):
@@ -201,9 +232,11 @@ class FormParser:
             label = parts[0] if parts and parts[0] else name
             raw_type = parts[1] if len(parts) >= 2 else 'text'
             ptype, options = FormParser._parse_type(raw_type)
-            default, placeholder, required, width = FormParser._parse_param_attributes(parts[2:])
+            (default, placeholder, required, width, options_sql,
+             searchable, allow_custom) = FormParser._parse_param_attributes(parts[2:])
             form.params.append(QueryParam(
-                name, label, ptype, options, default, placeholder, required, width
+                name, label, ptype, options, default, placeholder, required, width,
+                options_sql, searchable, allow_custom
             ))
 
         form.sql = FormParser._get_section(content, 'sql')
@@ -244,12 +277,21 @@ class FormParser:
         return True, 'OK'
 
     @staticmethod
+    def ensure_forms_dir(forms_dir):
+        """只在 forms 不存在时从随包 defaults/forms 初始化，绝不覆盖现场表单。"""
+        if os.path.exists(forms_dir):
+            return
+        defaults_dir = os.path.join(os.path.dirname(forms_dir), 'defaults', 'forms')
+        if os.path.isdir(defaults_dir):
+            shutil.copytree(defaults_dir, forms_dir)
+        else:
+            os.makedirs(forms_dir)
+
+    @staticmethod
     def load_forms_from_dir(forms_dir):
         """扫描 forms_dir 及其子目录中所有 .qry 文件，按分组返回。"""
         result = {}
-        if not os.path.exists(forms_dir):
-            os.makedirs(forms_dir)
-            return result
+        FormParser.ensure_forms_dir(forms_dir)
 
         for root, dirs, files in os.walk(forms_dir):
             dirs.sort()

@@ -66,19 +66,21 @@ max_rows = 5000
 
 ## `.qry` 查询项目格式
 
-一个查询项目由 `[meta]`、`[params]` 和 `[sql]` 三部分构成。既有格式无需修改即可继续使用。
+一个查询项目由 `[meta]`、`[params]` 和 `[sql]` 三部分构成。**既有 `.qry` 无需修改即可继续使用**；新增属性只在配置后生效。
 
 ```ini
 [meta]
 title = 体检人员查询
 group = 统计报表
-description = 按日期和人员信息查询体检记录
+description = 按日期、科室和人员信息查询体检记录
 # type = select
 
 [params]
 start_date = 开始日期 | date | {today} | required | width=150
+end_date = 结束日期 | date | {today} | required | width=150
+department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
+doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
 keyword = 关键词 | text | | placeholder=姓名、手机号或编号 | width=240px
-status = 状态 | select:全部,已登记,已完成 | 全部
 remark = 备注 | textarea | | placeholder=可输入多行查询说明
 only_active = 仅查询有效记录 | checkbox | 1
 gender = 性别 | radio:全部,男,女 | 全部
@@ -87,34 +89,42 @@ source = 来源系统 | hidden | PEIS
 [sql]
 SELECT TOP 100 *
 FROM YourTable
-WHERE CreateDate >= '{start_date}'
+WHERE CreateDate BETWEEN '{start_date}' AND '{end_date}'
+  AND Department = '{department}'
+  AND DoctorID = '{doctor}'
   AND Name LIKE '%{keyword}%'
 ```
 
-### 参数类型
+### 参数类型与统一值语义
 
-| 类型 | 示例 | Web 端表现 | 桌面端兼容策略 |
-|---|---|---|---|
-| `text` | `keyword = 关键词 | text` | 单行文本框 | 原有行为。 |
-| `date` | `start = 开始日期 | date` | 日期选择 | 原有行为。 |
-| `datetime` | `time = 时间 | datetime` | 日期时间选择 | 原有行为。 |
-| `number` | `count = 数量 | number` | 数字输入框 | 原有行为。 |
-| `select:A,B` | `status = 状态 | select:全部,完成` | 下拉选择 | 原有行为。 |
-| `textarea` | `remark = 备注 | textarea` | 多行文本框 | 安全回退为可输入的文本控件。 |
-| `checkbox` | `active = 有效 | checkbox | 1` | 勾选后提交 `1`，未勾选提交 `0` | 安全回退为可输入的文本控件。 |
-| `radio:A,B` | `gender = 性别 | radio:男,女` | 单选项 | 安全回退为可输入的文本控件。 |
-| `hidden` | `source = 来源 | hidden | PEIS` | 隐藏参数 | 安全回退为可输入的文本控件。 |
+| 类型 | 示例 | EXE 与 Web 的一致语义 |
+|---|---|---|
+| `text` | `keyword = 关键词 | text` | 单行文本。 |
+| `textarea` | `remark = 备注 | textarea` | 多行文本。 |
+| `date` | `start = 开始日期 | date` | 统一提交 `yyyy-MM-dd`。 |
+| `datetime` | `time = 时间 | datetime` | 统一提交 `yyyy-MM-dd HH:mm:ss`。 |
+| `number` | `count = 数量 | number` | 仅接受有效数字。 |
+| `select:A,B` | `status = 状态 | select:全部,完成` | 可输入包含关键字搜索，查询提交 option 的 `value`。 |
+| `select` | `doctor = 医生 | select | | options_sql=SELECT ...` | 可完全由数据库候选项提供，查询提交 `value`。 |
+| `checkbox` | `active = 有效 | checkbox | 1` | 始终提交 `1` 或 `0`。 |
+| `radio:A,B` | `gender = 性别 | radio:男,女` | 提交所选项的 `value`。 |
+| `hidden` | `source = 来源 | hidden | PEIS` | 不显示，始终提交配置默认值。 |
 
-### 可选属性
+### 默认值与可选属性
 
 | 属性 | 示例 | 说明 |
 |---|---|---|
-| 默认值 | `| 全部` | 位于类型后的第一个普通值；`{today}` 表示当天日期。 |
+| 默认值 | `| 全部` | 位于类型后的第一个普通值。`{today}` 在 `date/text` 中为当天 `yyyy-MM-dd`，在 `datetime` 中为当前 `yyyy-MM-dd HH:mm:ss`。 |
 | `placeholder` | `placeholder=请输入姓名` | 输入框的提示文字。 |
-| `required` | `required` 或 `required=true` | Web 端执行查询前要求填写。 |
-| `width` | `width=220px`、`width=220`、`width=35%` | Web 端字段宽度；纯数字按 `px` 处理。 |
+| `required` | `required` 或 `required=true` | 两端均在执行前校验；`checkbox` 必须为 `1`。 |
+| `width` | `width=220px`、`width=220`、`width=35%` | 控件宽度；纯数字按 `px` 处理。 |
+| `searchable` | `searchable` | 标记可搜索；所有 `select` 已默认启用输入包含匹配。 |
+| `allow_custom` | `allow_custom=true` | 默认 `false`。未开启时，临时搜索文字或不存在的候选项不能进入 SQL。 |
+| `options_sql` | `options_sql=SELECT DoctorID, DoctorName FROM Doctor` | 只允许单条只读 `SELECT`。一列时为 `value=label`；两列时第一列为 `value`、第二列为 `label`。 |
 
-未知类型、未知属性和不合法宽度会被安全忽略或回退为 `text`，不会导致整个查询项目不可用。
+静态 `select:` 候选项与 `options_sql` 返回项可并存，按 **value** 的首次出现顺序合并去重。动态候选加载采用短生命周期连接、10 秒查询超时和最多 1000 项保护；失败时保留静态项，并提示“候选数据加载失败，可刷新重试”。Web 端只接受 `file_path + param_name` 加载候选，绝不接受客户端提交的候选 SQL。
+
+未知类型、未知属性和不合法宽度会安全忽略或回退为 `text`，不会导致整个查询项目不可用。
 
 ## 查询与导出行为
 
@@ -128,10 +138,20 @@ Excel 导出使用当前已经查询到的结果，并按“查询项目标题_�
 
 本项目当前不包含 SSO、Token 鉴权、iframe 来源认证、正式 CSP、HTTPS、最小权限数据库账号或反向代理等生产安全治理。这些项目应在系统正式生产发布前由部署与安全负责人另行评估。
 
-## 打包
+## 打包与现场升级
 
-`build.bat` 使用 `DBQuery.spec` 调用 PyInstaller。打包配置会整体包含 `forms`、`templates` 和 `static` 目录，因此新增的模板、CSS、JavaScript 和本地 SVG（如有）随 Web 静态资源进入产物。完成打包后请使用以下方式进行实际冒烟验证：
+`build.bat` 使用 `DBQuery.spec` 生成 PyInstaller onedir 产物。打包配置会包含程序代码、`templates` 和 `static`；构建产物不应携带任何有凭据的现场 `config.ini`。
+
+| 项目 | 现场升级原则 |
+|---|---|
+| 程序文件 | 使用新 onedir 程序文件替换旧程序文件，并保留回退副本。 |
+| `templates` / `static` | 必须随程序同步更新，否则 Web 页面不能使用新控件。 |
+| 现场 `forms` | **默认不覆盖**。旧 `.qry` 可原样继续运行；新示例应单独放置或仅在文件不存在时复制。 |
+| 现场 `config.ini` | **绝不覆盖**。请保留现场数据库连接与 `[web]` 配置。 |
+
+完成构建后，必须对最终产物而非仅对源码进行冒烟验证：
 
 ```bat
+DBQuery.exe
 DBQuery.exe --web --port 8094
 ```

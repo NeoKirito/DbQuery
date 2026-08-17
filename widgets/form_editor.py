@@ -15,6 +15,7 @@ from PyQt5.QtGui import (
     QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QFontMetrics
 )
 from form_parser import TEMPLATE, FormParser
+from core.param_service import validate_options_sql
 
 
 # ──────────────────────────────────────────────
@@ -62,6 +63,11 @@ class QryHighlighter(QSyntaxHighlighter):
         # 参数占位符 {param_name}
         self.rules.append(
             (re.compile(r'\{[^}\s]+\}'), fmt('#CC0099', bold=True))
+        )
+        # 参数扩展属性与控件类型。
+        self.rules.append(
+            (re.compile(r'\b(options_sql|searchable|allow_custom|required|placeholder|width)\b', re.IGNORECASE),
+             fmt('#7A3E9D', bold=True))
         )
         # 注释 -- 和 #
         self.rules.append(
@@ -242,7 +248,24 @@ class FormEditorDialog(QDialog):
                         query_type = v.strip().lower()
                         break
 
-        # SQL 安全检查（警告，不强制阻止保存）
+        # 动态候选 SQL 必须在保存时即通过只读 SELECT 校验，不能延迟到现场使用。
+        for line_number, line in enumerate(content.splitlines(), 1):
+            token = line.strip()
+            if not token or token.startswith(('#', ';')):
+                continue
+            match = re.search(r'\boptions_sql\s*=\s*(.+)$', token, re.IGNORECASE)
+            if match:
+                ok, reason = validate_options_sql(match.group(1).strip())
+                if not ok:
+                    QMessageBox.warning(
+                        self, "候选项 SQL 无效",
+                        "第 {} 行的 options_sql 未通过安全检查：{}\n\n仅允许一条只读 SELECT 语句。".format(
+                            line_number, reason
+                        )
+                    )
+                    return False
+
+        # 主查询 SQL 安全检查（保留既有保存确认行为）
         m = re.search(r'\[sql\](.*?)(?=\n\s*\[|\Z)', content,
                       re.DOTALL | re.IGNORECASE)
         if m:
@@ -294,53 +317,92 @@ class FormEditorDialog(QDialog):
             self.accept()
 
     def _show_help(self):
-        text = u"""\
-表单文件 (.qry) 格式说明
-═══════════════════════════════════════════
+        """显示可滚动帮助，内容与 TEMPLATE/README 的 .qry 语法保持一致。"""
+        text = u"""表单文件 (.qry) 格式说明
 
-[meta]  基本信息
-  title       = 表单在标签页上显示的名称
+[meta]
+  title       = 查询名称
   group       = 分组（同时是子目录名称）
   description = 描述信息（可选）
-  type        = select（默认，SELECT 查询）
-                exec  （存储过程，SQL 以 EXEC 开头）
+  type        = select（默认，只读 SELECT）或 exec（以 EXEC/EXECUTE 开头）
 
-[params]  查询条件（可选）
-  格式：参数名 = 显示标签 | 类型 | 默认值
+[params]
+  基本结构：参数名 = 显示标签 | 类型 | 默认值 | 可选属性...
 
-  类型：
-    text           文本输入框
-    date           日期选择（YYYY-MM-DD）
-    datetime       日期时间选择
-    number         数字输入框
-    select:A,B,C   下拉选择框（逗号分隔选项）
+  类型与提交值：
+    text                 单行文本
+    textarea             多行文本
+    date                 yyyy-MM-dd
+    datetime             yyyy-MM-dd HH:mm:ss
+    number               有效数字
+    checkbox             选中为 1，未选中为 0
+    radio:A,B            提交选中项 value
+    hidden               不显示，始终提交配置默认值
+    select:A,B,C         下拉框，提交 option value，可输入关键字包含匹配
+    select               下拉框，候选项可完全由 options_sql 提供
 
-  特殊默认值：
-    {today}  在 date/datetime 中代表今日
+  默认值：
+    空默认值可省略；{today} 在 date/text 中为 yyyy-MM-dd，在 datetime 中为
+    yyyy-MM-dd HH:mm:ss。required 表示不能为空；checkbox required 必须为 1。
 
-  示例：
-    start_date = 开始日期 | date
-    end_date   = 结束日期 | date | {today}
-    status     = 状态     | select:全部,启用,禁用 | 全部
-    keyword    = 关键字   | text
+  可选属性：
+    placeholder=提示文字
+    required 或 required=true
+    width=220（也支持 px、%、rem、em、vw）
+    searchable（select 默认可搜索）
+    allow_custom=true（默认 false；不开启时不得提交不存在的候选项）
+    options_sql=SELECT ...（只允许单条只读 SELECT）
 
-[sql]  SQL 查询语句
-  • SELECT 模式：只能使用 SELECT，不允许 INSERT/UPDATE/DELETE 等
-  • 存储过程模式：以 EXEC 或 EXECUTE 开头，调用存储过程
-  • 用 {参数名} 引用 [params] 中定义的参数
-  • 支持 SQL 注释（-- 或 /* */ 格式）
+  动态下拉规则：
+    options_sql 返回一列：该列同时为 value 和 label。
+    options_sql 返回两列：第一列为 value，第二列为 label。
+    静态 select 项与动态项按 value 保序合并去重；界面显示 label，查询使用 value。
+    动态候选加载失败不会阻止静态项使用；可刷新重试。
 
-SELECT 模式示例：
-  SELECT TOP 1000 *
-  FROM Orders
-  WHERE OrderDate BETWEEN '{start_date}' AND '{end_date}'
-    AND Status = '{status}'
-    AND CustomerName LIKE '%{keyword}%'
+  完整示例：
+    [meta]
+    title = 体检人员查询
+    group = 综合查询
+    description = 按日期、科室和人员信息查询
 
-存储过程模式示例（需在 [meta] 中设置 type = exec）：
-  EXEC dbo.usp_QueryOrders
-      @StartDate = '{start_date}',
-      @EndDate   = '{end_date}',
-      @Status    = '{status}'
-═══════════════════════════════════════════"""
-        QMessageBox.information(self, "格式说明", text)
+    [params]
+    start_date = 开始日期 | date | {today} | required
+    end_date = 结束日期 | date | {today} | required
+    department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
+    doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
+    keyword = 姓名/体检号 | text | | placeholder=请输入姓名或体检号
+    enabled = 仅启用 | checkbox | 1
+    source = 来源系统 | hidden | PEIS
+
+    [sql]
+    SELECT TOP 1000 *
+    FROM Employee
+    WHERE CreateDate BETWEEN '{start_date}' AND '{end_date}'
+      AND Department = '{department}'
+      AND DoctorID = '{doctor}'
+
+[sql]
+  用 {参数名} 引用 [params] 中声明的参数。SELECT 模式仅允许查询；exec 模式
+  仅允许受控存储过程调用。参数中的单引号会自动转义。"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("表单格式说明")
+        dialog.setMinimumSize(760, 560)
+        dialog.resize(850, 680)
+        layout = QVBoxLayout(dialog)
+        title = QLabel(".qry 表单格式说明")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        viewer = QPlainTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setPlainText(text)
+        mono_font = QFont("Courier New", 10)
+        mono_font.setStyleHint(QFont.TypeWriter)
+        viewer.setFont(mono_font)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(dialog.accept)
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+        button_row.addWidget(close_btn)
+        layout.addWidget(title)
+        layout.addWidget(viewer, stretch=1)
+        layout.addLayout(button_row)
+        dialog.exec_()

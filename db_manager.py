@@ -26,7 +26,7 @@ DEFAULT_DB_CONFIG = {
     'database': 'master',
     'driver': '',
     'trusted_connection': 'no',
-    'username': 'sa',
+    'username': '',
     'password': ''
 }
 
@@ -259,8 +259,14 @@ class DBManager:
         finally:
             self._close_quietly(cursor)
 
-    def execute_query(self, sql):
-        """桌面版兼容接口，不应用 Web 端的超时与行数上限。"""
+    def execute_query(self, sql, query_type='select'):
+        """桌面兼容接口，不套用 Web 行数上限。
+
+        与 Web 的安全原则保持一致：仅 SELECT 在明确的瞬态连接错误时使用新连接
+        重试一次；EXEC 和 timeout 绝不自动重试，避免潜在的重复副作用。
+        """
+        normalized_type = (query_type or 'select').lower().strip()
+        allow_retry = normalized_type == 'select'
         last_error = None
         for attempt in range(2):
             conn = None
@@ -269,9 +275,16 @@ class DBManager:
                 return self._run_unlimited_query(conn, sql)
             except pyodbc.Error as exc:
                 last_error = exc
-                logger.warning('pyodbc error on desktop query attempt %d/2: %s', attempt + 1, exc)
-                if attempt == 0:
+                if self._is_timeout_error(exc):
+                    logger.warning('Desktop query timed out; retry disabled: %s', exc)
+                    raise QueryTimeoutError('查询超时') from exc
+                if allow_retry and attempt == 0 and self._is_transient_connection_error(exc):
+                    logger.warning('Transient desktop SELECT connection error; retrying once: %s', exc)
                     continue
+                logger.warning(
+                    'pyodbc error on desktop %s query attempt %d/2; retry disabled or unsafe: %s',
+                    normalized_type, attempt + 1, exc
+                )
                 raise
             finally:
                 self._close_quietly(conn)

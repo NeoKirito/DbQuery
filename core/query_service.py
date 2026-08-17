@@ -8,6 +8,9 @@ import datetime
 import logging
 
 from form_parser import FormParser
+from core.param_service import (
+    build_sql_with_params, normalize_params, resolve_default, static_options
+)
 
 logger = logging.getLogger('DBQuery.query_service')
 
@@ -21,17 +24,17 @@ def escape_sql_param(value):
     return value.replace("'", "''")
 
 
-def build_final_sql(form, param_values):
+def build_final_sql(form, param_values, options_by_name=None, already_normalized=False):
+    """根据表单定义构建最终 SQL。
+
+    只接受 ``form.params`` 中声明的参数名；未知客户端字段不会参与替换。动态
+    select 的候选项由调用方通过 ``options_by_name`` 提供，避免将 label 或任意
+    搜索词误当成 SQL 参数。
     """
-    根据表单模板和参数值构建最终 SQL
-    :param form: QueryForm 对象
-    :param param_values: dict {param_name: value}
-    :return: str, 替换后的 SQL
-    """
-    sql = form.sql
-    for name, value in param_values.items():
-        sql = sql.replace('{' + name + '}', escape_sql_param(str(value)))
-    return sql
+    normalized = param_values if already_normalized else normalize_params(
+        form, param_values, options_by_name=options_by_name
+    )
+    return build_sql_with_params(form, normalized)
 
 
 # ════════════════════════════════════════
@@ -232,11 +235,17 @@ def serialize_form(form, base_dir=None):
                 'name':    p.name,
                 'label':   p.label,
                 'ptype':   p.ptype,
+                # 保留旧 options 字段，同时提供 value/label 分离的 option_items。
                 'options': p.options,
-                'default': p.default,
+                'option_items': static_options(p),
+                'default': resolve_default(p),
+                'raw_default': p.default,
                 'placeholder': p.placeholder,
                 'required': p.required,
                 'width': p.width,
+                'options_sql': p.options_sql,
+                'searchable': p.searchable or p.ptype == 'select',
+                'allow_custom': p.allow_custom,
             }
             for p in form.params
         ],

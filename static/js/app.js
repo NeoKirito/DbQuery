@@ -4,6 +4,8 @@ var dataTable = null;
 
 $(document).ready(function () {
     initializeDefaultValues();
+    initializeSearchableSelects();
+    loadDynamicSelectOptions();
     restoreSidebarState();
     loadFormTree();
     initializeProjectSwitcher();
@@ -47,6 +49,152 @@ function initializeDefaultValues() {
         if (!$input.val() && $input.data('default') === '{today}') {
             $input.val(nowStr());
         }
+    });
+}
+
+function initializeSearchableSelects() {
+    $('.searchable-select').each(function () {
+        var $root = $(this);
+        var $input = $root.find('.searchable-select-input');
+        var $value = $root.find('.searchable-select-value');
+        var $menu = $root.find('.searchable-select-menu');
+        var $toggle = $root.find('.searchable-select-toggle');
+        var activeIndex = -1;
+
+        function visibleOptions() {
+            return $menu.find('.searchable-select-option:visible');
+        }
+        function closeMenu() {
+            $menu.prop('hidden', true);
+            $input.attr('aria-expanded', 'false');
+            activeIndex = -1;
+            $menu.find('.is-active').removeClass('is-active');
+        }
+        function setActive(index) {
+            var $options = visibleOptions();
+            if (!$options.length) return;
+            activeIndex = Math.max(0, Math.min(index, $options.length - 1));
+            $options.removeClass('is-active');
+            var $active = $options.eq(activeIndex).addClass('is-active');
+            $active[0].scrollIntoView({block: 'nearest'});
+        }
+        function openMenu() {
+            filterOptions($input.val());
+            $menu.prop('hidden', false);
+            $input.attr('aria-expanded', 'true');
+            if (visibleOptions().length) setActive(0);
+        }
+        function selectOption($option) {
+            if (!$option || !$option.length) return;
+            $input.val($option.text());
+            $value.val($option.data('value'));
+            $menu.find('[aria-selected="true"]').attr('aria-selected', 'false');
+            $option.attr('aria-selected', 'true');
+            closeMenu();
+        }
+        function filterOptions(query) {
+            var needle = String(query || '').toLowerCase();
+            $menu.find('.searchable-select-option').each(function () {
+                var text = $(this).text().toLowerCase();
+                $(this).toggle(!needle || text.indexOf(needle) >= 0);
+            });
+            activeIndex = -1;
+        }
+
+        $root.data('searchableSelect', {
+            setOptions: function (options) {
+                var currentValue = $value.val();
+                $menu.empty();
+                (options || []).forEach(function (option) {
+                    var value = option && option.value !== undefined ? String(option.value) : '';
+                    var label = option && option.label !== undefined ? String(option.label) : value;
+                    if (!value) return;
+                    var $option = $('<button type="button" class="searchable-select-option" role="option"></button>');
+                    $option.attr('data-value', value).attr('aria-selected', 'false').text(label);
+                    $menu.append($option);
+                });
+                var $selected = $menu.find('.searchable-select-option').filter(function () {
+                    return String($(this).data('value')) === String(currentValue);
+                }).first();
+                if ($selected.length) {
+                    selectOption($selected);
+                } else {
+                    $value.val('');
+                    $input.val('');
+                }
+            }
+        });
+
+        var initialValue = $value.val();
+        var $initial = $menu.find('.searchable-select-option').filter(function () {
+            return String($(this).data('value')) === String(initialValue);
+        }).first();
+        if ($initial.length) selectOption($initial);
+
+        $input.on('focus', openMenu);
+        $input.on('input', function () {
+            // 搜索过程中不保留旧 value；必须由用户确认合法候选项。
+            $value.val('');
+            $menu.find('[aria-selected="true"]').attr('aria-selected', 'false');
+            openMenu();
+        });
+        $input.on('keydown', function (event) {
+            var $options;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                openMenu();
+                $options = visibleOptions();
+                if ($options.length) setActive(activeIndex + (event.key === 'ArrowDown' ? 1 : -1));
+            } else if (event.key === 'Enter') {
+                event.preventDefault();
+                $options = visibleOptions();
+                if ($options.length) selectOption($options.eq(activeIndex >= 0 ? activeIndex : 0));
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeMenu();
+            }
+        });
+        $toggle.on('click', function () {
+            if ($menu.prop('hidden')) {
+                $input.trigger('focus');
+            } else {
+                closeMenu();
+            }
+        });
+        $menu.on('mousedown', '.searchable-select-option', function (event) {
+            event.preventDefault();
+            selectOption($(this));
+        });
+        $(document).on('mousedown', function (event) {
+            if (!$(event.target).closest($root).length) closeMenu();
+        });
+    });
+}
+
+function loadDynamicSelectOptions() {
+    var config = window.DBQUERY || {};
+    var params = config.formParams || [];
+    params.forEach(function (param) {
+        if (!param || param.ptype !== 'select' || !param.options_sql) return;
+        var $root = $('.searchable-select').filter(function () {
+            return $(this).data('name') === param.name;
+        }).first();
+        if (!$root.length) return;
+        $.ajax({
+            url: '/api/options',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({file_path: config.filePath, param_name: param.name}),
+            success: function (data) {
+                var component = $root.data('searchableSelect');
+                if (component && component.setOptions) component.setOptions(data.options || []);
+                if (data.warning) showToast(data.warning, 'warning');
+            },
+            error: function () {
+                // 静态候选仍保留；数据库细节只记录在服务端日志。
+                showToast('候选数据加载失败，可刷新重试。', 'warning');
+            }
+        });
     });
 }
 
@@ -233,6 +381,14 @@ function validateRequiredParams() {
     $('.param-input[required]').each(function () {
         if (!this.checkValidity()) {
             valid = false;
+            return false;
+        }
+    });
+    $('.searchable-select[data-required="1"]').each(function () {
+        var $root = $(this);
+        if (!$root.find('.searchable-select-value').val()) {
+            valid = false;
+            $root.find('.searchable-select-input').trigger('focus');
             return false;
         }
     });
