@@ -4,7 +4,7 @@ import os
 import tempfile
 import unittest
 
-from core.sql_safety import normalize_sql_for_safety
+from core.sql_safety import contains_sql_keyword, normalize_sql_for_safety, sql_tokens_for_safety
 from core.param_service import (
     OptionsLoadError, ParameterError, QueryConfigurationError, RequiredParameterError,
     dynamic_options, load_options, merge_options, normalize_params, resolve_default,
@@ -167,18 +167,23 @@ SELECT 1
     def test_options_sql_rejects_select_into_all_identifier_forms(self):
         """P0-1 验收：INTO 各种 SQL Server 标识符形式应全部被拒绝。"""
         bad_sqls = [
-            # 要求内指定的必须拒绝的形式
-            'SELECT 1 INTO [DBQuery_Options_Test]',
-            'SELECT 1 INTO #DBQuery_Options_Test',
-            'SELECT 1 INTO ##DBQuery_Options_Test',
-            'SELECT 1 INTO [dbo].[DBQuery_Options_Test]',
-            # 普通标识符 / schema.table
+            # 普通、schema-qualified、方括号、双引号、临时表等所有标识符形式。
             'SELECT 1 INTO TableName',
             'SELECT 1 INTO dbo.TableName',
-            # 大小写变化
+            'SELECT 1 INTO [TableName]',
+            'SELECT 1 INTO [dbo].[TableName]',
+            'SELECT 1 INTO "TableName"',
+            'SELECT 1 INTO "dbo"."TableName"',
+            'SELECT 1 INTO #TempTable',
+            'SELECT 1 INTO ##GlobalTempTable',
+            # 注释分隔和跨行形式。
+            'SELECT 1 INTO/**/"TableName"',
+            'SELECT 1 INTO/**/[TableName]',
+            'SELECT 1 INTO/**/#TempTable',
+            'SELECT 1\nINTO/**/\n"TableName"',
+            # 大小写变化与多余空白。
             'select 1 into #tmp',
             'SELECT 1 INTO [Schema].[Table]',
-            # 多余空白 / 换行
             'SELECT 1\nINTO  [AnotherTable]',
             'SELECT  1  INTO  ##GlobalTemp',
         ]
@@ -192,9 +197,15 @@ SELECT 1
             'SELECT ID, Name FROM Doctor',
             'SELECT ID, Name FROM Doctor WHERE Enabled=1 ORDER BY Name',
             'SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL',
-            # INTO 出现在列别名/字层中不应被误弹：
-            # （正常 SQL 不会在字段列表后接 INTO，这里主要验证基础语法）
             'SELECT CASE WHEN 1=1 THEN 1 ELSE 0 END AS Flag FROM T',
+            # INTO 出现在字符串、quoted identifier、方括号或注释中均不是 SQL keyword。
+            "SELECT 'INTO #Temp' AS Example",
+            "SELECT 'text INTO Table' AS Example",
+            'SELECT [INTO] FROM SomeTable',
+            'SELECT "INTO" FROM SomeTable',
+            'SELECT INTOCount FROM SomeTable',
+            'SELECT SomeINTOValue FROM SomeTable',
+            'SELECT ID /* INTO #Temp */ FROM Doctor',
         ]
         for sql in good_sqls:
             ok, reason = validate_options_sql(sql)
@@ -223,11 +234,21 @@ SELECT 1
             'SELECT 1 INTO /* comment */ #DBQuery_Options_Test',
             'SELECT 1\nINTO/**/\n#DBQuery_Options_Test',
             'select 1 into/**/[dbo].[DBQuery_Options_Test]',
+            'SELECT 1 INTO/**/"DBQuery_Options_Test"',
         ]
         for sql in blocked:
             with self.subTest(sql=sql):
                 self.assertFalse(FormParser.is_safe_sql(sql, 'select')[0])
                 self.assertFalse(validate_options_sql(sql)[0])
+
+    def test_token_scanner_detects_only_executable_into_keyword(self):
+        self.assertTrue(contains_sql_keyword('SELECT 1 INTO "TableName"', 'INTO'))
+        self.assertTrue(contains_sql_keyword('SELECT 1 INTO/**/#TempTable', 'into'))
+        self.assertFalse(contains_sql_keyword("SELECT 'INTO #Temp' AS Example", 'INTO'))
+        self.assertFalse(contains_sql_keyword('SELECT [INTO] FROM SomeTable', 'INTO'))
+        self.assertFalse(contains_sql_keyword('SELECT "INTO" FROM SomeTable', 'INTO'))
+        self.assertFalse(contains_sql_keyword('SELECT ID /* INTO #Temp */ FROM Doctor', 'INTO'))
+        self.assertNotIn('INTO', sql_tokens_for_safety('SELECT INTOCount, SomeINTOValue FROM T'))
 
     def test_safe_selects_with_comments_remain_allowed(self):
         allowed = [
