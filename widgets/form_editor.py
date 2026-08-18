@@ -323,6 +323,8 @@ class FormEditorDialog(QDialog):
 【基本结构】
   参数名 = 显示标签 | 类型 | 默认值 | 可选属性...
   [params] 中每行配置一个查询条件；[sql] 中用 {参数名} 引用它。
+  默认值是类型后的第一个普通字段；没有默认值时保留空位，例如：keyword = 关键词 | text | | placeholder=请输入关键词
+  以 # 或 ; 开头的整行是注释，不会作为查询条件。
 
 【查询条件类型】
   text                 单行文字输入。
@@ -333,7 +335,7 @@ class FormEditorDialog(QDialog):
   checkbox             选中提交 1，未选中提交 0。
   radio:A,B            单选项，提交选中项的值。
   hidden               不显示，始终提交配置的默认值。
-  select:A,B,C         普通下拉框；也可加 options_sql 从数据库加载候选项。
+  select:A,B,C         下拉框；可写静态候选，也可加 options_sql 从数据库加载候选项。
 
 【静态可搜索 Select】
   示例（可直接粘贴到 [params]）：
@@ -363,11 +365,17 @@ class FormEditorDialog(QDialog):
   Department 由数据库加载。两者按 value 合并并去重；数据库候选加载失败时，静态“全部”仍可使用并可刷新重试。
 
 【是否允许自定义输入】
-  allow_custom=false：默认值，必须选择候选项。
+  allow_custom 是可搜索 Select 的自定义输入开关。
+  allow_custom=false：默认值，必须选择候选项，临时搜索文字不能作为 SQL 参数。
   allow_custom=true：允许直接输入候选列表中没有的内容。
 
   例如：
     keyword_type = 关键词类型 | select:姓名,体检号 | 姓名 | allow_custom=true
+
+【主查询类型】
+  type = select：默认值；[sql] 必须以 SELECT 开头。
+  type = exec：仅在调用受控存储过程时使用；[sql] 必须以 EXEC 或 EXECUTE 开头。
+  type 写在 [meta] 段，例如：type = exec。
 
 【常用属性】
   required 或 required=true      必填；checkbox 必须为 1。
@@ -389,7 +397,7 @@ class FormEditorDialog(QDialog):
   [params]
   start_date = 开始日期 | date | {today} | required
   end_date = 结束日期 | date | {today} | required
-  department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT DepartmentName FROM Department WHERE Enabled=1 ORDER BY DepartmentName
+  department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
   doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
   keyword = 姓名/体检号 | text | | placeholder=请输入姓名或体检号
 
@@ -397,7 +405,7 @@ class FormEditorDialog(QDialog):
   SELECT ...
   FROM ...
   WHERE CheckDate BETWEEN '{start_date}' AND '{end_date}'
-    AND DepartmentName = '{department}'
+    AND Department = '{department}'
     AND DoctorID = '{doctor}'
 
 【其他说明】
