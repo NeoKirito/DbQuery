@@ -335,34 +335,32 @@ class FormEditorDialog(QDialog):
   hidden               不显示，始终提交配置的默认值。
   select:A,B,C         普通下拉框；也可加 options_sql 从数据库加载候选项。
 
-【普通下拉框】
-  示例：
-    status = 状态 | select:全部,正常,异常 | 全部
+【静态可搜索 Select】
+  示例（可直接粘贴到 [params]）：
+    status = 状态 | select:全部,启用,禁用 | 全部 | searchable
 
-  下拉数据直接写在 .qry 中；可以输入关键字搜索；查询提交选中的 value。
+  下拉候选直接写在 .qry 中；可以输入关键字搜索；查询提交选中的 value。
+  本例的默认值是“全部”。
 
-【从数据库加载下拉框候选项】
-  如果下拉框内容来自数据库，请在 select 条件最后使用：
-    options_sql=SELECT ...
+【动态单列 Select】
+  数据库候选项使用 options_sql=；整条配置必须写在同一行。
 
-  一列查询（整条配置写在同一行）：
-    department = 科室 | select | | searchable | options_sql=SELECT DISTINCT DepartmentName FROM Department WHERE Enabled=1 ORDER BY DepartmentName
+  示例（可直接粘贴到 [params]）：
+    department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
 
-  如果 SQL 返回一列（例如 内科、外科、检验科），界面显示值和实际提交值相同：
-  显示“内科”，实际参数也是“内科”。
+  上例中数据库返回的 Department 同时是 value 和 label；“全部”保持在第一项。
+  也就是说，界面显示“内科”时，最终 SQL 参数也是“内科”。
 
-  两列查询（整条配置写在同一行）：
+【动态 value/label 双列 Select】
+  示例（可直接粘贴到 [params]）：
     doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
 
-  如果返回“1001 | 张医生”、“1002 | 李医生”：
-  第一列是 value（实际提交 1001、1002），第二列是 label（界面显示 张医生、李医生）。
+  上例界面显示 DoctorName，最终 SQL 参数使用 DoctorID。
+  例如界面显示“张医生”时可提交 1032：第一列 DoctorID 是 value，第二列 DoctorName 是 label。
 
 【静态 + 数据库动态混合】
-  示例（整条配置写在同一行）：
-    department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT DepartmentName FROM Department WHERE Enabled=1
-
-  “全部”来自静态配置；其他科室来自数据库。两者按 value 合并并去重。
-  数据库候选加载失败时，静态候选项仍可使用；可刷新重试。
+  上面的“动态单列 Select”就是静态 + 动态混合：`select:全部` 的“全部”来自静态配置，
+  Department 由数据库加载。两者按 value 合并并去重；数据库候选加载失败时，静态“全部”仍可使用并可刷新重试。
 
 【是否允许自定义输入】
   allow_custom=false：默认值，必须选择候选项。
