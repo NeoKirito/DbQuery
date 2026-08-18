@@ -318,72 +318,93 @@ class FormEditorDialog(QDialog):
 
     def _show_help(self):
         """显示可滚动帮助，内容与 TEMPLATE/README 的 .qry 语法保持一致。"""
-        text = u"""表单文件 (.qry) 格式说明
+        text = u""".qry 表单格式说明
 
-[meta]
-  title       = 查询名称
-  group       = 分组（同时是子目录名称）
-  description = 描述信息（可选）
-  type        = select（默认，只读 SELECT）或 exec（以 EXEC/EXECUTE 开头）
+【基本结构】
+  参数名 = 显示标签 | 类型 | 默认值 | 可选属性...
+  [params] 中每行配置一个查询条件；[sql] 中用 {参数名} 引用它。
 
-[params]
-  基本结构：参数名 = 显示标签 | 类型 | 默认值 | 可选属性...
+【查询条件类型】
+  text                 单行文字输入。
+  textarea             多行文字输入。
+  date                 日期，格式 yyyy-MM-dd。
+  datetime             日期时间，格式 yyyy-MM-dd HH:mm:ss。
+  number               仅允许有效数字。
+  checkbox             选中提交 1，未选中提交 0。
+  radio:A,B            单选项，提交选中项的值。
+  hidden               不显示，始终提交配置的默认值。
+  select:A,B,C         普通下拉框；也可加 options_sql 从数据库加载候选项。
 
-  类型与提交值：
-    text                 单行文本
-    textarea             多行文本
-    date                 yyyy-MM-dd
-    datetime             yyyy-MM-dd HH:mm:ss
-    number               有效数字
-    checkbox             选中为 1，未选中为 0
-    radio:A,B            提交选中项 value
-    hidden               不显示，始终提交配置默认值
-    select:A,B,C         下拉框，提交 option value，可输入关键字包含匹配
-    select               下拉框，候选项可完全由 options_sql 提供
+【普通下拉框】
+  示例：
+    status = 状态 | select:全部,正常,异常 | 全部
 
-  默认值：
-    空默认值可省略；{today} 在 date/text 中为 yyyy-MM-dd，在 datetime 中为
-    yyyy-MM-dd HH:mm:ss。required 表示不能为空；checkbox required 必须为 1。
+  下拉数据直接写在 .qry 中；可以输入关键字搜索；查询提交选中的 value。
 
-  可选属性：
-    placeholder=提示文字
-    required 或 required=true
-    width=220（也支持 px、%、rem、em、vw）
-    searchable（select 默认可搜索）
-    allow_custom=true（默认 false；不开启时不得提交不存在的候选项）
-    options_sql=SELECT ...（只允许单条只读 SELECT）
+【从数据库加载下拉框候选项】
+  如果下拉框内容来自数据库，请在 select 条件最后使用：
+    options_sql=SELECT ...
 
-  动态下拉规则：
-    options_sql 返回一列：该列同时为 value 和 label。
-    options_sql 返回两列：第一列为 value，第二列为 label。
-    静态 select 项与动态项按 value 保序合并去重；界面显示 label，查询使用 value。
-    动态候选加载失败不会阻止静态项使用；可刷新重试。
+  一列查询（整条配置写在同一行）：
+    department = 科室 | select | | searchable | options_sql=SELECT DISTINCT DepartmentName FROM Department WHERE Enabled=1 ORDER BY DepartmentName
 
-  完整示例：
-    [meta]
-    title = 体检人员查询
-    group = 综合查询
-    description = 按日期、科室和人员信息查询
+  如果 SQL 返回一列（例如 内科、外科、检验科），界面显示值和实际提交值相同：
+  显示“内科”，实际参数也是“内科”。
 
-    [params]
-    start_date = 开始日期 | date | {today} | required
-    end_date = 结束日期 | date | {today} | required
-    department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
+  两列查询（整条配置写在同一行）：
     doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
-    keyword = 姓名/体检号 | text | | placeholder=请输入姓名或体检号
-    enabled = 仅启用 | checkbox | 1
-    source = 来源系统 | hidden | PEIS
 
-    [sql]
-    SELECT TOP 1000 *
-    FROM Employee
-    WHERE CreateDate BETWEEN '{start_date}' AND '{end_date}'
-      AND Department = '{department}'
-      AND DoctorID = '{doctor}'
+  如果返回“1001 | 张医生”、“1002 | 李医生”：
+  第一列是 value（实际提交 1001、1002），第二列是 label（界面显示 张医生、李医生）。
 
-[sql]
-  用 {参数名} 引用 [params] 中声明的参数。SELECT 模式仅允许查询；exec 模式
-  仅允许受控存储过程调用。参数中的单引号会自动转义。"""
+【静态 + 数据库动态混合】
+  示例（整条配置写在同一行）：
+    department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT DepartmentName FROM Department WHERE Enabled=1
+
+  “全部”来自静态配置；其他科室来自数据库。两者按 value 合并并去重。
+  数据库候选加载失败时，静态候选项仍可使用；可刷新重试。
+
+【是否允许自定义输入】
+  allow_custom=false：默认值，必须选择候选项。
+  allow_custom=true：允许直接输入候选列表中没有的内容。
+
+  例如：
+    keyword_type = 关键词类型 | select:姓名,体检号 | 姓名 | allow_custom=true
+
+【常用属性】
+  required 或 required=true      必填；checkbox 必须为 1。
+  placeholder=提示文字           输入框提示。
+  searchable                     select 可输入关键字搜索（select 默认可搜索）。
+  width=220                      控件宽度；也支持 px、%、rem、em、vw。
+  {today}                        date/text 为当天 yyyy-MM-dd；datetime 为当前日期时间。
+
+【数据库候选 SQL 限制】
+  options_sql 只能写一条只读 SELECT 查询。
+  不能使用 INSERT、UPDATE、DELETE、EXEC、SELECT INTO 或多条 SQL。
+
+【常用完整示例】
+  [meta]
+  title = 体检人员查询
+  group = 综合查询
+  description = 按日期、科室和人员信息查询
+
+  [params]
+  start_date = 开始日期 | date | {today} | required
+  end_date = 结束日期 | date | {today} | required
+  department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT DepartmentName FROM Department WHERE Enabled=1 ORDER BY DepartmentName
+  doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
+  keyword = 姓名/体检号 | text | | placeholder=请输入姓名或体检号
+
+  [sql]
+  SELECT ...
+  FROM ...
+  WHERE CheckDate BETWEEN '{start_date}' AND '{end_date}'
+    AND DepartmentName = '{department}'
+    AND DoctorID = '{doctor}'
+
+【其他说明】
+  [meta] 可填写 title、group、description；type 默认 select。
+  SELECT 模式仅允许查询；exec 模式仅允许受控存储过程调用。参数中的单引号会自动转义。"""
         dialog = QDialog(self)
         dialog.setWindowTitle("表单格式说明")
         dialog.setMinimumSize(760, 560)
