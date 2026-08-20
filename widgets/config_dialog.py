@@ -5,7 +5,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QMessageBox,
-    QApplication
+    QApplication, QSpinBox
 )
 from PyQt5.QtCore import Qt
 
@@ -84,6 +84,40 @@ class ConfigDialog(QDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
+        integration_grp = QGroupBox("宿主程序无感登录")
+        integration_form = QFormLayout(integration_grp)
+        integration_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.integration_enabled_check = QCheckBox("启用受签名的宿主无感登录")
+        self.integration_key_edit = QLineEdit()
+        self.integration_key_edit.setEchoMode(QLineEdit.Password)
+        self.integration_key_edit.setPlaceholderText("生成后仅配置在 DBQuery 和宿主后端；不要放入前端或 URL")
+        self.integration_show_key_check = QCheckBox("显示")
+        self.integration_show_key_check.toggled.connect(self._toggle_integration_key_visibility)
+        generate_key_btn = QPushButton("生成新密钥")
+        generate_key_btn.clicked.connect(self._generate_integration_key)
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.integration_key_edit)
+        key_row.addWidget(self.integration_show_key_check)
+        key_row.addWidget(generate_key_btn)
+
+        self.integration_ttl_spin = QSpinBox()
+        self.integration_ttl_spin.setRange(10, 300)
+        self.integration_ttl_spin.setSuffix(" 秒")
+        self.integration_skew_spin = QSpinBox()
+        self.integration_skew_spin.setRange(10, 300)
+        self.integration_skew_spin.setSuffix(" 秒")
+        integration_form.addRow("", self.integration_enabled_check)
+        integration_form.addRow("共享密钥:", key_row)
+        integration_form.addRow("票据有效期:", self.integration_ttl_spin)
+        integration_form.addRow("允许时钟偏差:", self.integration_skew_spin)
+        integration_hint = QLabel(
+            "<small><i>宿主后端用密钥签名后请求短期票据；浏览器仅通过 iframe POST 消费票据。"
+            "密钥轮换后，请同步更新宿主后端配置。</i></small>"
+        )
+        integration_hint.setWordWrap(True)
+        integration_form.addRow("", integration_hint)
+        layout.addWidget(integration_grp)
+
         # 按钮区
         btn_row = QHBoxLayout()
         self.test_btn = QPushButton("测试连接")
@@ -108,6 +142,17 @@ class ConfigDialog(QDialog):
                   self.user_label, self.pass_label):
             w.setEnabled(not trusted)
 
+    def _toggle_integration_key_visibility(self, visible):
+        self.integration_key_edit.setEchoMode(
+            QLineEdit.Normal if visible else QLineEdit.Password
+        )
+
+    def _generate_integration_key(self):
+        from db_manager import DBManager
+        self.integration_key_edit.setText(DBManager.generate_integration_key())
+        self.integration_key_edit.setFocus()
+        self.integration_key_edit.selectAll()
+
     def _load_current(self):
         cfg = self.db_manager.get_db_config()
         self.server_edit.setText(cfg.get('server', ''))
@@ -127,6 +172,12 @@ class ConfigDialog(QDialog):
         self.pass_edit.setText(cfg.get('password', ''))
         self._toggle_auth(Qt.Checked if trusted else Qt.Unchecked)
 
+        integration_cfg = self.db_manager.get_integration_config()
+        self.integration_enabled_check.setChecked(bool(integration_cfg.get('enabled')))
+        self.integration_key_edit.setText(integration_cfg.get('shared_key', ''))
+        self.integration_ttl_spin.setValue(integration_cfg.get('ticket_ttl_seconds', 60))
+        self.integration_skew_spin.setValue(integration_cfg.get('max_clock_skew_seconds', 60))
+
     def _build_config_dict(self):
         return {
             'server':             self.server_edit.text().strip(),
@@ -136,6 +187,14 @@ class ConfigDialog(QDialog):
             'trusted_connection': 'yes' if self.trusted_check.isChecked() else 'no',
             'username':           self.user_edit.text().strip(),
             'password':           self.pass_edit.text(),
+        }
+
+    def _build_integration_config(self):
+        return {
+            'enabled': self.integration_enabled_check.isChecked(),
+            'shared_key': self.integration_key_edit.text().strip(),
+            'ticket_ttl_seconds': self.integration_ttl_spin.value(),
+            'max_clock_skew_seconds': self.integration_skew_spin.value(),
         }
 
     def _test(self):
@@ -165,5 +224,10 @@ class ConfigDialog(QDialog):
         if not cfg['database']:
             QMessageBox.warning(self, "提示", "请填写数据库名称")
             return
+        integration_cfg = self._build_integration_config()
+        if integration_cfg['enabled'] and len(integration_cfg['shared_key']) < 32:
+            QMessageBox.warning(self, "提示", "启用宿主无感登录前，请生成并保存至少 32 个字符的共享密钥")
+            return
         self.db_manager.set_db_config(cfg)
+        self.db_manager.set_integration_config(integration_cfg)
         self.accept()

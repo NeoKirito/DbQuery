@@ -5,6 +5,8 @@ DBQuery Web 服务。
 """
 import datetime
 import functools
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -74,6 +76,12 @@ _LOGIN_FAILURES = {}
 _LOGIN_LIMIT = 5
 _LOGIN_WINDOW_SECONDS = 300
 
+# 宿主无感登录：签名 nonce 与一次性票据仅保存在当前服务进程内。
+_INTEGRATION_LOCK = threading.Lock()
+_INTEGRATION_NONCES = {}
+_INTEGRATION_TICKETS = {}
+_INTEGRATION_MAX_BODY_LENGTH = 8192
+
 
 def _client_key():
     return request.remote_addr or 'unknown'
@@ -106,6 +114,87 @@ def _safe_next_url(value):
     value = value or ''
     # 仅允许本站相对路径，避免登录成功后被重定向到外部站点。
     return value if value.startswith('/') and not value.startswith('//') else ''
+
+
+def _integration_canonical_request(timestamp, nonce, username, password):
+    """生成宿主与 DBQuery 两端相同的 HMAC 签名原文。"""
+    return 'POST\n/api/integration/sso-ticket\n{}\n{}\n{}\n{}'.format(
+        timestamp, nonce, username, password
+    )
+
+
+def _purge_integration_state(now=None):
+    now = time.time() if now is None else now
+    for bucket in (_INTEGRATION_NONCES, _INTEGRATION_TICKETS):
+        for key, item in list(bucket.items()):
+            expires_at = item if isinstance(item, (int, float)) else item.get('expires_at', 0)
+            if expires_at <= now:
+                bucket.pop(key, None)
+
+
+def _integration_error(message, status=403, error_type='integration_authentication_failed'):
+    """返回不泄露服务密钥、凭据或数据库细节的集成错误。"""
+    return error_response(message, status, error_type)
+
+
+def _validate_integration_request(data):
+    """验证宿主服务身份、时戳、nonce 和 HMAC；返回配置或 None。"""
+    if not isinstance(data, dict):
+        return None, _integration_error('无感登录请求格式无效。', 400, 'invalid_integration_request')
+
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    timestamp_text = request.headers.get('X-DBQuery-Integration-Timestamp', '')
+    nonce = request.headers.get('X-DBQuery-Integration-Nonce', '')
+    signature = request.headers.get('X-DBQuery-Integration-Signature', '')
+    if (not username or not password or len(username) > 64 or len(password) > 256 or
+            not timestamp_text or not nonce or len(nonce) > 128 or not signature):
+        return None, _integration_error('无感登录请求无效。', 400, 'invalid_integration_request')
+
+    try:
+        timestamp = int(timestamp_text)
+    except (TypeError, ValueError):
+        return None, _integration_error('无感登录请求已失效。', 401, 'expired_integration_request')
+
+    cfg = DBManager().get_integration_config()
+    if not cfg.get('enabled') or len(cfg.get('shared_key', '')) < 32:
+        return None, _integration_error('宿主无感登录尚未启用。', 403, 'integration_not_enabled')
+    if abs(time.time() - timestamp) > cfg['max_clock_skew_seconds']:
+        return None, _integration_error('无感登录请求已失效。', 401, 'expired_integration_request')
+
+    canonical = _integration_canonical_request(timestamp_text, nonce, username, password)
+    expected = hmac.new(
+        cfg['shared_key'].encode('utf-8'), canonical.encode('utf-8'), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature.lower()):
+        return None, _integration_error('无感登录服务身份验证失败。', 403, 'invalid_integration_signature')
+
+    now = time.time()
+    with _INTEGRATION_LOCK:
+        _purge_integration_state(now)
+        if nonce in _INTEGRATION_NONCES:
+            return None, _integration_error('无感登录请求已使用。', 409, 'replayed_integration_request')
+        _INTEGRATION_NONCES[nonce] = now + cfg['max_clock_skew_seconds']
+    return cfg, None
+
+
+def _issue_integration_ticket(username, next_url, ttl_seconds):
+    ticket = secrets.token_urlsafe(32)
+    with _INTEGRATION_LOCK:
+        _purge_integration_state()
+        _INTEGRATION_TICKETS[ticket] = {
+            'username': username,
+            'next_url': _safe_next_url(next_url) or url_for('index'),
+            'expires_at': time.time() + ttl_seconds,
+        }
+    return ticket
+
+
+def _consume_integration_ticket(ticket):
+    with _INTEGRATION_LOCK:
+        _purge_integration_state()
+        # pop 使票据天然只能使用一次，即使后续跳转或会话写入失败也不能重放。
+        return _INTEGRATION_TICKETS.pop(ticket, None)
 
 
 def _unauthenticated_response():
@@ -210,6 +299,49 @@ def _csrf_token():
         token = secrets.token_urlsafe(24)
         session['csrf_token'] = token
     return token
+
+
+@app.route('/api/integration/sso-ticket', methods=['POST'])
+def issue_integration_ticket():
+    """供宿主后端调用：验证签名与当前操作员凭据后签发一次性短期票据。"""
+    if request.content_length is not None and request.content_length > _INTEGRATION_MAX_BODY_LENGTH:
+        return _integration_error('无感登录请求过大。', 413, 'invalid_integration_request')
+    data = request.get_json(silent=True)
+    cfg, failure = _validate_integration_request(data)
+    if failure is not None:
+        return failure
+
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if not DBManager().authenticate_user(username, password):
+        return _integration_error('无感登录凭据无效。', 401, 'invalid_integration_credentials')
+
+    ticket = _issue_integration_ticket(username, data.get('next'), cfg['ticket_ttl_seconds'])
+    logger.info('Issued a one-time host integration ticket')
+    return jsonify({
+        'ticket': ticket,
+        'expires_in': cfg['ticket_ttl_seconds'],
+        'consume_path': url_for('consume_integration_ticket'),
+    })
+
+
+@app.route('/sso/consume', methods=['POST'])
+def consume_integration_ticket():
+    """供宿主页面以 iframe POST 消费短期票据，建立浏览器会话且不显示登录页。"""
+    ticket = request.form.get('ticket', '')
+    if not ticket or len(ticket) > 256:
+        return '宿主登录票据无效，请返回宿主程序重新进入。', 401
+    state = _consume_integration_ticket(ticket)
+    if not state:
+        return '宿主登录票据已失效，请返回宿主程序重新进入。', 401
+
+    session.clear()
+    session['auth_user'] = state['username']
+    session['auth_source'] = 'host_integration'
+    session['csrf_token'] = secrets.token_urlsafe(24)
+    session.permanent = True
+    logger.info('Consumed a one-time host integration ticket')
+    return redirect(state['next_url'])
 
 
 @app.route('/login', methods=['GET', 'POST'])
