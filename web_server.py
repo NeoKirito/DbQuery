@@ -16,7 +16,9 @@ import threading
 import time
 from urllib.parse import unquote
 
-from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import (Flask, jsonify, make_response, redirect, render_template, request,
+                   send_file, session, url_for)
+
 from flask.json.provider import DefaultJSONProvider
 
 if getattr(sys, 'frozen', False):
@@ -178,16 +180,47 @@ def _validate_integration_request(data):
     return cfg, None
 
 
-def _issue_integration_ticket(username, next_url, ttl_seconds):
+def _issue_integration_ticket(username, next_url, ttl_seconds, auth_source='host_integration'):
     ticket = secrets.token_urlsafe(32)
     with _INTEGRATION_LOCK:
         _purge_integration_state()
         _INTEGRATION_TICKETS[ticket] = {
             'username': username,
             'next_url': _safe_next_url(next_url) or url_for('index'),
+            'auth_source': auth_source,
             'expires_at': time.time() + ttl_seconds,
         }
     return ticket
+
+
+def _frontend_integration_config():
+    """验证浏览器请求来源是否是管理员明确配置的宿主前端 Origin。"""
+    cfg = DBManager().get_integration_config()
+    origin = request.headers.get('Origin', '').strip().lower().rstrip('/')
+    if not cfg.get('frontend_enabled') or not cfg.get('frontend_allowed_origins'):
+        return None, None, _integration_error(
+            '前端无密钥登录尚未启用。', 403, 'frontend_integration_not_enabled'
+        )
+    if not origin or origin not in cfg['frontend_allowed_origins']:
+        return None, None, _integration_error(
+            '宿主前端来源未获授权。', 403, 'frontend_integration_origin_denied'
+        )
+    return cfg, origin, None
+
+
+def _frontend_cors_response(response, origin):
+    """仅向精确匹配的可信 Origin 开放前端票据接口。"""
+    response = make_response(response)
+    response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Access-Control-Max-Age'] = '300'
+    response.headers['Vary'] = 'Origin'
+    return response
+
+
+def _frontend_ticket_error(message, status, error_type, origin):
+    return _frontend_cors_response(_integration_error(message, status, error_type), origin)
 
 
 def _consume_integration_ticket(ticket):
@@ -301,8 +334,51 @@ def _csrf_token():
     return token
 
 
+@app.route('/api/integration/frontend-ticket', methods=['POST', 'OPTIONS'])
+def issue_frontend_integration_ticket():
+    """供无后端的宿主前端调用：凭当前登录凭据换取一次性短期 iframe 票据。"""
+    cfg, origin, failure = _frontend_integration_config()
+    if failure is not None:
+        return failure
+    if request.method == 'OPTIONS':
+        return _frontend_cors_response(('', 204), origin)
+    if request.content_length is not None and request.content_length > _INTEGRATION_MAX_BODY_LENGTH:
+        return _frontend_ticket_error('前端无感登录请求过大。', 413,
+                                      'invalid_frontend_integration_request', origin)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _frontend_ticket_error('前端无感登录请求格式无效。', 400,
+                                      'invalid_frontend_integration_request', origin)
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if not username or not password or len(username) > 64 or len(password) > 256:
+        return _frontend_ticket_error('前端无感登录凭据无效。', 400,
+                                      'invalid_frontend_integration_request', origin)
+    if not _login_allowed():
+        return _frontend_ticket_error('登录尝试过于频繁，请稍后再试。', 429,
+                                      'frontend_integration_rate_limited', origin)
+    if not DBManager().authenticate_user(username, password):
+        _record_login_failure()
+        return _frontend_ticket_error('账号或密码无效，账号可能未启用。', 401,
+                                      'invalid_frontend_integration_credentials', origin)
+
+    _clear_login_failures()
+    ticket = _issue_integration_ticket(
+        username, data.get('next'), cfg['ticket_ttl_seconds'],
+        auth_source='frontend_password_exchange'
+    )
+    logger.info('Issued a one-time frontend integration ticket')
+    return _frontend_cors_response(jsonify({
+        'ticket': ticket,
+        'expires_in': cfg['ticket_ttl_seconds'],
+        'consume_path': url_for('consume_integration_ticket'),
+    }), origin)
+
+
 @app.route('/api/integration/sso-ticket', methods=['POST'])
 def issue_integration_ticket():
+
     """供宿主后端调用：验证签名与当前操作员凭据后签发一次性短期票据。"""
     if request.content_length is not None and request.content_length > _INTEGRATION_MAX_BODY_LENGTH:
         return _integration_error('无感登录请求过大。', 413, 'invalid_integration_request')
@@ -337,7 +413,8 @@ def consume_integration_ticket():
 
     session.clear()
     session['auth_user'] = state['username']
-    session['auth_source'] = 'host_integration'
+    session['auth_source'] = state.get('auth_source', 'host_integration')
+
     session['csrf_token'] = secrets.token_urlsafe(24)
     session.permanent = True
     logger.info('Consumed a one-time host integration ticket')

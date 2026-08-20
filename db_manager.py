@@ -9,6 +9,7 @@ import logging
 import os
 import secrets
 import sys
+from urllib.parse import urlparse
 
 import pyodbc
 
@@ -41,6 +42,10 @@ DEFAULT_INTEGRATION_CONFIG = {
     'shared_key': '',
     'ticket_ttl_seconds': '60',
     'max_clock_skew_seconds': '60',
+    # 仅适用于宿主只有浏览器前端、无后端可保存密钥的兼容模式。
+    # 必须显式开启并填写精确的前端 Origin，不能使用通配符。
+    'frontend_enabled': 'no',
+    'frontend_allowed_origins': '',
 }
 
 _DRIVER_PRIORITY = [
@@ -113,8 +118,24 @@ class DBManager:
             ),
         }
 
+    @staticmethod
+    def _parse_allowed_origins(value):
+        """将配置中的逗号/分号/换行分隔 Origin 规范化为精确白名单。"""
+        candidates = str(value or '').replace(';', ',').replace('\n', ',').split(',')
+        origins = []
+        for candidate in candidates:
+            parsed = urlparse(candidate.strip())
+            if (parsed.scheme.lower() not in ('http', 'https') or not parsed.netloc or
+                    parsed.username or parsed.password or parsed.path not in ('', '/') or
+                    parsed.params or parsed.query or parsed.fragment):
+                continue
+            origin = '{}://{}'.format(parsed.scheme.lower(), parsed.netloc.lower())
+            if origin not in origins:
+                origins.append(origin)
+        return origins
+
     def get_integration_config(self):
-        """返回宿主无感登录配置；缺省时功能关闭。"""
+        """返回宿主无感登录配置；缺省时所有无感登录模式均关闭。"""
         section = self.config['integration'] if self.config.has_section('integration') else {}
         return {
             'enabled': str(section.get('enabled', 'no')).lower() in ('yes', '1', 'true', 'on'),
@@ -127,6 +148,11 @@ class DBManager:
                 section.get('max_clock_skew_seconds'),
                 int(DEFAULT_INTEGRATION_CONFIG['max_clock_skew_seconds']), maximum=300
             ),
+            'frontend_enabled': str(section.get('frontend_enabled', 'no')).lower() in
+                                ('yes', '1', 'true', 'on'),
+            'frontend_allowed_origins': self._parse_allowed_origins(
+                section.get('frontend_allowed_origins', '')
+            ),
         }
 
     @staticmethod
@@ -136,6 +162,11 @@ class DBManager:
 
     def set_integration_config(self, cfg_dict):
         section = DEFAULT_INTEGRATION_CONFIG.copy()
+        raw_origins = cfg_dict.get('frontend_allowed_origins', '')
+        if isinstance(raw_origins, (list, tuple)):
+            raw_origins = ','.join(raw_origins)
+        frontend_origins = self._parse_allowed_origins(raw_origins)
+
         section.update({
             'enabled': 'yes' if cfg_dict.get('enabled') else 'no',
             'shared_key': str(cfg_dict.get('shared_key', '')).strip(),
@@ -147,7 +178,10 @@ class DBManager:
                 cfg_dict.get('max_clock_skew_seconds'),
                 int(DEFAULT_INTEGRATION_CONFIG['max_clock_skew_seconds']), maximum=300
             )),
+            'frontend_enabled': 'yes' if cfg_dict.get('frontend_enabled') else 'no',
+            'frontend_allowed_origins': ', '.join(frontend_origins),
         })
+
         self.config['integration'] = section
         self.save_config()
 
