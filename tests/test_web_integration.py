@@ -363,12 +363,80 @@ class FailingManager:
 
 class WebRouteTests(unittest.TestCase):
     def setUp(self):
-        web_server.app.config.update(TESTING=True)
+        web_server.app.config.update(TESTING=True, SECRET_KEY='web-route-test-secret')
         self.client = web_server.app.test_client()
-        self.file_path = 'forms/系统/数据库表结构.qry'
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_base_dir = web_server.BASE_DIR
+        self.old_forms_dir = web_server.FORMS_DIR
+        self.forms_dir = os.path.join(self.temp_dir.name, 'forms')
+        os.makedirs(self.forms_dir)
+        self.file_path = 'forms/public.qry'
+        self.hidden_file_path = 'forms/internal.qry'
+        with open(os.path.join(self.forms_dir, 'public.qry'), 'w', encoding='utf-8') as form_file:
+            form_file.write('''[meta]\ntitle = 公开查询\ngroup = 测试\ndescription = 认证回归测试表单\nweb_enabled = true\n[params]\n[sql]\nSELECT 1 AS result\n''')
+        with open(os.path.join(self.forms_dir, 'internal.qry'), 'w', encoding='utf-8') as form_file:
+            form_file.write('''[meta]\ntitle = 内部查询\ngroup = 测试\nweb_enabled = false\n[params]\n[sql]\nSELECT 1 AS result\n''')
+        web_server.BASE_DIR = self.temp_dir.name
+        web_server.FORMS_DIR = self.forms_dir
+        self._authenticate()
+
+    def tearDown(self):
+        web_server.BASE_DIR = self.old_base_dir
+        web_server.FORMS_DIR = self.old_forms_dir
+        self.temp_dir.cleanup()
+
+    def _authenticate(self):
+        with self.client.session_transaction() as session_state:
+            session_state['auth_user'] = 'tester'
+            session_state['csrf_token'] = 'test-csrf-token'
 
     def query(self):
         return self.client.post('/api/query', json={'file_path': self.file_path, 'params': {}})
+
+    def test_unauthenticated_requests_cannot_view_forms_or_call_apis(self):
+        anonymous = web_server.app.test_client()
+        self.assertEqual(anonymous.get('/').status_code, 302)
+        self.assertIn('/login', anonymous.get('/').headers.get('Location', ''))
+        self.assertEqual(anonymous.get('/query/{}'.format(self.file_path)).status_code, 302)
+        response = anonymous.get('/api/forms')
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()['error_type'], 'authentication_required')
+        response = anonymous.post('/api/query', json={'file_path': self.file_path, 'params': {}})
+        self.assertEqual(response.status_code, 401)
+
+    def test_login_creates_session_only_after_database_authentication(self):
+        anonymous = web_server.app.test_client()
+        response = anonymous.get('/login')
+        self.assertEqual(response.status_code, 200)
+        with anonymous.session_transaction() as session_state:
+            token = session_state['csrf_token']
+        manager = type('M', (), {'authenticate_user': lambda self, user, password: user == 'tester' and password == 'secret'})()
+        with patch('web_server.DBManager', return_value=manager):
+            response = anonymous.post('/login', data={
+                'username': 'tester', 'password': 'secret', 'csrf_token': token, 'next': '/'
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers.get('Location'), '/')
+        with anonymous.session_transaction() as session_state:
+            self.assertEqual(session_state.get('auth_user'), 'tester')
+            self.assertNotIn('password', session_state)
+
+    def test_web_enabled_controls_list_route_and_api_access(self):
+        response = self.client.get('/api/forms')
+        payload = response.get_json()
+        rendered = [form['file_path'] for forms in payload.values() for form in forms]
+        self.assertIn(self.file_path, rendered)
+        self.assertNotIn(self.hidden_file_path, rendered)
+        self.assertEqual(self.client.get('/query/{}'.format(self.hidden_file_path)).status_code, 404)
+        response = self.client.post('/api/query', json={'file_path': self.hidden_file_path, 'params': {}})
+        self.assertEqual(response.status_code, 404)
+
+    def test_logout_requires_csrf_and_clears_session(self):
+        self.assertEqual(self.client.post('/logout', data={}).status_code, 400)
+        response = self.client.post('/logout', data={'csrf_token': 'test-csrf-token'})
+        self.assertEqual(response.status_code, 302)
+        with self.client.session_transaction() as session_state:
+            self.assertNotIn('auth_user', session_state)
 
     def test_index_and_embed_routes_render_business_ui(self):
         response = self.client.get('/')

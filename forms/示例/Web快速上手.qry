@@ -1,0 +1,20 @@
+[meta]
+title = Web 快速上手（安全示例）
+group = 示例
+description = 登录后可直接运行；不读取任何业务表，用于验证 Web 权限、查询和导出流程。
+web_enabled = true
+
+[params]
+keyword = 演示关键词 | text | 欢迎使用 | placeholder=可输入任意演示文字
+
+[sql]
+SELECT
+    N'登录成功：当前表单由 web_enabled = true 显式授权给已登录 Web 用户。' AS 使用说明,
+    N'{keyword}' AS 演示输入,
+    CONVERT(varchar(19), GETDATE(), 120) AS 当前数据库时间
+
+# 使用步骤：
+# 1. 在 EXE 登录窗口完成数据库连接配置，并使用 qx_czyxx 中启用且未删除的账号登录。
+# 2. Web/嵌入页先登录，再打开本表单并点击“执行查询”。
+# 3. 新建业务表单默认不允许 Web 访问；请在 EXE 表单编辑器中勾选“允许已登录 Web 用户查看此表单”。
+# 4. 复制本表单并替换 [params] 与 [sql]，再按需开启 Web 可见权限。

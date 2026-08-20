@@ -15,6 +15,7 @@ TEMPLATE = u"""\
 title = 新建查询
 group = 默认
 description = 查询描述（可选）
+# web_enabled = false  （默认 false；仅 true 时已登录 Web 用户可查看）
 # type = select    （默认，SELECT 查询）
 # type = exec      （存储过程，SQL 以 EXEC 开头）
 
@@ -99,6 +100,8 @@ class QueryForm:
         self.description = ''
         self.group = ''
         self.query_type = 'select'
+        # 默认拒绝 Web 访问；必须在 [meta] 明确写 web_enabled = true。
+        self.web_enabled = False
         self.params = []
         self.sql = ''
         self.file_path = ''
@@ -215,6 +218,8 @@ class FormParser:
                     form.group = value
                 elif key == 'type':
                     form.query_type = value.lower().strip()
+                elif key == 'web_enabled':
+                    form.web_enabled = value.lower() in ('1', 'true', 'yes', 'on', '是')
 
         if not form.title:
             form.title = os.path.splitext(os.path.basename(file_path))[0]

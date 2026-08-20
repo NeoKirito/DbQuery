@@ -4,15 +4,17 @@ DBQuery Web 服务。
 启动方式：python web_server.py（默认端口 8094）。
 """
 import datetime
+import functools
 import logging
 import os
+import secrets
 import sys
 import tempfile
 import threading
 import time
 from urllib.parse import unquote
 
-from flask import Flask, jsonify, render_template, request, send_file
+from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
 from flask.json.provider import DefaultJSONProvider
 
 if getattr(sys, 'frozen', False):
@@ -58,6 +60,80 @@ app = Flask(
 )
 app.json_provider_class = DBQueryJSONProvider
 app.json = DBQueryJSONProvider(app)
+# 未配置显式环境变量时，每次服务启动生成新的高熵密钥；服务重启后要求重新登录。
+# 这避免将会话密钥写入 .qry、模板或前端链接。
+app.config.update(
+    SECRET_KEY=os.environ.get('DBQUERY_SESSION_SECRET') or secrets.token_urlsafe(32),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=8),
+)
+
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_FAILURES = {}
+_LOGIN_LIMIT = 5
+_LOGIN_WINDOW_SECONDS = 300
+
+
+def _client_key():
+    return request.remote_addr or 'unknown'
+
+
+def _login_allowed():
+    now = time.monotonic()
+    key = _client_key()
+    with _LOGIN_LOCK:
+        history = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
+        _LOGIN_FAILURES[key] = history
+        return len(history) < _LOGIN_LIMIT
+
+
+def _record_login_failure():
+    now = time.monotonic()
+    key = _client_key()
+    with _LOGIN_LOCK:
+        history = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
+        history.append(now)
+        _LOGIN_FAILURES[key] = history
+
+
+def _clear_login_failures():
+    with _LOGIN_LOCK:
+        _LOGIN_FAILURES.pop(_client_key(), None)
+
+
+def _safe_next_url(value):
+    value = value or ''
+    # 仅允许本站相对路径，避免登录成功后被重定向到外部站点。
+    return value if value.startswith('/') and not value.startswith('//') else ''
+
+
+def _unauthenticated_response():
+    if request.path.startswith('/api/'):
+        return error_response('请先登录后再访问查询服务。', 401, 'authentication_required')
+    target = request.full_path if request.query_string else request.path
+    return redirect(url_for('login', next=_safe_next_url(target)))
+
+
+def login_required(view):
+    """对页面与 API 使用同一会话强制认证。"""
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get('auth_user'):
+            return _unauthenticated_response()
+        return view(*args, **kwargs)
+    return wrapped
+
+
+@app.after_request
+def apply_security_headers(response):
+    # 查询页面和 API 不保留在浏览器缓存中，避免登出后从历史缓存读取数据。
+    if not request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'no-store, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'same-origin'
+    return response
 
 
 def get_embed_context():
@@ -71,6 +147,8 @@ def get_embed_context():
         'embed_mode': embed,
         'hide_header': hide_header or embed,
         'sidebar_hidden': sidebar_hidden,
+        'current_user': session.get('auth_user', ''),
+        'page_name': 'app',
     }
 
 
@@ -83,7 +161,7 @@ def error_response(message, status=500, error_type=None):
 
 
 def get_form_from_path(file_path):
-    """仅加载 forms 目录内的 .qry，拒绝路径穿越和非表单文件。"""
+    """仅加载 Web 明确启用的 forms 内 .qry，拒绝路径穿越和未授权表单。"""
     decoded_path = unquote(file_path or '').replace('\\', '/')
     abs_path = os.path.realpath(os.path.join(BASE_DIR, decoded_path))
     forms_root = os.path.realpath(FORMS_DIR)
@@ -93,7 +171,10 @@ def get_form_from_path(file_path):
         is_form_path = False
     if not is_form_path or not abs_path.lower().endswith('.qry') or not os.path.isfile(abs_path):
         return None, decoded_path, None
-    return FormParser.parse_file(abs_path), decoded_path, abs_path
+    form = FormParser.parse_file(abs_path)
+    if not bool(getattr(form, 'web_enabled', False)):
+        return None, decoded_path, None
+    return form, decoded_path, abs_path
 
 
 def normalize_rows(rows):
@@ -123,16 +204,71 @@ def form_options(form, db_manager):
     return options_by_name, warnings
 
 
+def _csrf_token():
+    token = session.get('csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(24)
+        session['csrf_token'] = token
+    return token
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Web 与嵌入页共用的账号密码登录入口。"""
+    if session.get('auth_user'):
+        return redirect(_safe_next_url(request.args.get('next')) or url_for('index'))
+
+    next_url = _safe_next_url(request.values.get('next'))
+    error = ''
+    if request.method == 'POST':
+        if request.form.get('csrf_token', '') != session.get('csrf_token', ''):
+            return render_template('login.html', error=u'登录页面已失效，请刷新后重试。',
+                                   next_url=next_url, csrf_token=_csrf_token(),
+                                   page_name='login'), 400
+        if not _login_allowed():
+            return render_template('login.html', error=u'登录尝试过于频繁，请稍后再试。',
+                                   next_url=next_url, csrf_token=_csrf_token(),
+                                   page_name='login'), 429
+
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        if DBManager().authenticate_user(username, password):
+            session.clear()
+            session['auth_user'] = username
+            session['csrf_token'] = secrets.token_urlsafe(24)
+            session.permanent = True
+            _clear_login_failures()
+            return redirect(next_url or url_for('index'))
+
+        _record_login_failure()
+        error = u'账号、密码无效，账号可能未启用，或数据服务暂不可用。'
+
+    return render_template('login.html', error=error, next_url=next_url,
+                           csrf_token=_csrf_token(), page_name='login')
+
+
+@app.route('/logout', methods=['POST'])
+@login_required
+def logout():
+    if request.form.get('csrf_token', '') != session.get('csrf_token', ''):
+        return '请求无效，请刷新页面后重试。', 400
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route('/')
+@login_required
 def index():
-    """首页：表单列表。"""
+    """首页：仅显示已显式允许 Web 访问的表单列表。"""
     page_context = get_embed_context()
     return render_template(
-        'index.html', forms_data=load_all_forms(FORMS_DIR), **page_context
+        'index.html', forms_data=load_all_forms(FORMS_DIR, web_only=True),
+        csrf_token=_csrf_token(), **page_context
     )
 
 
 @app.route('/query/<path:file_path>')
+@login_required
 def query_page(file_path):
     """查询页面。"""
     page_context = get_embed_context()
@@ -147,17 +283,20 @@ def query_page(file_path):
         'query.html',
         form=serialize_form(form, BASE_DIR),
         file_path=decoded_path,
+        csrf_token=_csrf_token(),
         **page_context
     )
 
 
 @app.route('/api/forms')
+@login_required
 def api_forms():
-    """返回所有表单 JSON。"""
-    return jsonify(load_all_forms(FORMS_DIR))
+    """返回已明确授权给 Web 的表单 JSON。"""
+    return jsonify(load_all_forms(FORMS_DIR, web_only=True))
 
 
 @app.route('/api/options', methods=['POST'])
+@login_required
 def api_options():
     """按表单路径和参数名加载配置中的候选项，绝不接收客户端 SQL。"""
     data = request.get_json(silent=True) or {}
@@ -189,6 +328,7 @@ def api_options():
 
 
 @app.route('/api/test-connection')
+@login_required
 def api_test_connection():
     """使用独立连接测试数据库连通性。"""
     try:
@@ -201,6 +341,7 @@ def api_test_connection():
 
 
 @app.route('/api/query', methods=['POST'])
+@login_required
 def api_query():
     """执行受超时与行数限制保护的查询。"""
     data = request.get_json(silent=True)
@@ -271,6 +412,7 @@ def api_query():
 
 
 @app.route('/api/export', methods=['POST'])
+@login_required
 def api_export():
     """将当前页查询结果导出为带元信息的 Excel 文件。"""
     data = request.get_json(silent=True)

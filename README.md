@@ -34,6 +34,8 @@ DBQuery.exe --web --port 8094
 
 默认访问地址为 `http://localhost:8094/`。启动脚本还会提示局域网访问地址；请按本单位网络与防火墙规范配置访问范围。
 
+桌面端和 Web 端均要求使用 `qx_czyxx` 中 **启用且未删除** 的操作员账号登录。认证通过后才可以查看任何表单、候选项、查询结果和导出数据。
+
 ## 嵌入业务系统
 
 Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。所有内部的表单切换和返回链接会保留当前嵌入参数。
@@ -46,6 +48,29 @@ Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。所�
 | 嵌入模式保留侧栏 | `http://host:8094/query/forms/示例/用户查询.qry?embed=1` | 显示可折叠的“查询项目”侧栏，折叠状态保存在浏览器本地。 |
 
 建议 iframe 容器由宿主系统提供稳定的内容区高度。DbQuery 嵌入模式会使用 iframe 的完整可用高度，并仅使结果区域产生必要的纵向滚动；宽表仍可在结果区域内横向滚动。
+
+嵌入页面与独立访问使用同一个登录页和服务端会话。嵌入页未登录时会显示登录界面；宿主系统不能仅凭 iframe 地址绕过认证。若宿主和 DbQuery 不属于同一站点且浏览器禁止第三方 Cookie，请由部署人员按浏览器安全策略评估，或后续接入企业 SSO，不应在 URL 中传递账号密码。
+
+## 登录与 Web 表单权限
+
+认证 SQL 由程序在服务端参数化执行，等价于：
+
+```sql
+SELECT TOP 1 1
+FROM qx_czyxx
+WHERE czybm = ? AND [pass] = ? AND czyzt = N'启用' AND deleted = '0'
+```
+
+账号和密码不会写入 URL、前端脚本、日志或 Web 会话。Web 会话默认为 8 小时，服务重启后要求重新登录；连续失败登录会按客户端地址短时限制，以降低猜测密码风险。
+
+每个 `.qry` 的 `[meta]` 可配置 `web_enabled`：
+
+| 配置 | 行为 |
+|---|---|
+| 缺省或 `web_enabled = false` | **默认拒绝 Web**。表单仍可在 EXE 中管理和使用，但不会出现在 Web 列表，直接链接和 API 调用也会被拒绝。 |
+| `web_enabled = true` | 已登录 Web 用户可查看、加载候选项、执行查询和导出。 |
+
+在 EXE 的“新建表单 / 编辑表单”窗口中，勾选 **允许已登录 Web 用户查看此表单** 即可自动写入该元数据。首次登录后可先运行 `forms/示例/Web快速上手.qry`；它不读取业务表，用于验证登录、表单授权、查询与导出流程。
 
 ## Web 查询配置
 
@@ -73,6 +98,7 @@ max_rows = 5000
 title = 体检人员查询
 group = 统计报表
 description = 按日期、科室和人员信息查询体检记录
+web_enabled = true
 # type = select
 
 [params]
@@ -121,6 +147,7 @@ WHERE CreateDate BETWEEN '{start_date}' AND '{end_date}'
 | `searchable` | `searchable` | 标记可搜索；所有 `select` 已默认启用输入包含匹配。 |
 | `allow_custom` | `allow_custom=true` | 默认 `false`。未开启时，临时搜索文字或不存在的候选项不能进入 SQL。 |
 | `options_sql` | `options_sql=SELECT DoctorID, DoctorName FROM Doctor` | 只允许单条只读 `SELECT`。一列时为 `value=label`；两列时第一列为 `value`、第二列为 `label`。 |
+| `web_enabled`（`[meta]`） | `web_enabled = true` | 默认 `false`；仅明确为 `true` 的表单对已登录 Web 用户开放。 |
 
 静态 `select:` 候选项与 `options_sql` 返回项可并存，按 **value** 的首次出现顺序合并去重。动态候选加载采用短生命周期连接、10 秒查询超时和最多 1000 项保护；失败时保留静态项，并提示“候选数据加载失败，可刷新重试”。Web 端只接受 `file_path + param_name` 加载候选，绝不接受客户端提交的候选 SQL。
 
@@ -136,7 +163,7 @@ Excel 导出使用当前已经查询到的结果，并按“查询项目标题_�
 
 `FormParser.is_safe_sql()` 仍保留并持续用于所有 Web 查询请求。`select` 类型仅允许以 `SELECT` 开头的查询，`exec` 类型仅允许受控的存储过程调用；此项改造没有删除或削弱现有检查。
 
-本项目当前不包含 SSO、Token 鉴权、iframe 来源认证、正式 CSP、HTTPS、最小权限数据库账号或反向代理等生产安全治理。这些项目应在系统正式生产发布前由部署与安全负责人另行评估。
+本项目已提供基于 `qx_czyxx` 的服务端账号密码认证、HttpOnly 会话、表单 Web 显式授权、登录限流和未认证 API 拦截；当前仍不包含 SSO、企业身份联邦、iframe 来源认证、正式 CSP、HTTPS、最小权限数据库账号或反向代理等生产安全治理。这些项目应在系统正式生产发布前由部署与安全负责人另行评估。
 
 ## 打包与现场升级
 

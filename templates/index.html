@@ -45,8 +45,19 @@
                 <h1 class="page-title">综合查询</h1>
                 <p class="page-desc">请选择查询项目</p>
             </div>
+            {% if current_user and not hide_header %}
+            <div style="text-align: right; color: #667085; font-size: 13px;">
+                <div>当前账号：{{ current_user }}</div>
+                <form method="post" action="{{ url_for('logout') }}" style="margin-top: 6px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">退出登录</button>
+                </form>
+            </div>
+            {% endif %}
         </header>
-        {% if sidebar_hidden %}
+        {% if not forms_data %}
+        <div class="compact-empty-state">当前账号暂无可在 Web 端查看的查询表单。请由管理员在 EXE 表单编辑器中勾选“允许已登录 Web 用户查看此表单”。</div>
+        {% elif sidebar_hidden %}
         <section class="business-section project-list-section" aria-labelledby="project-list-heading">
             <div class="section-heading" id="project-list-heading">查询项目</div>
             <div class="project-list">
