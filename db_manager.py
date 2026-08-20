@@ -7,6 +7,7 @@
 import configparser
 import logging
 import os
+import secrets
 import sys
 
 import pyodbc
@@ -33,6 +34,13 @@ DEFAULT_DB_CONFIG = {
 DEFAULT_WEB_CONFIG = {
     'query_timeout': 60,
     'max_rows': 5000,
+}
+
+DEFAULT_INTEGRATION_CONFIG = {
+    'enabled': 'no',
+    'shared_key': '',
+    'ticket_ttl_seconds': '60',
+    'max_clock_skew_seconds': '60',
 }
 
 _DRIVER_PRIORITY = [
@@ -104,6 +112,44 @@ class DBManager:
                 section.get('max_rows'), DEFAULT_WEB_CONFIG['max_rows'], maximum=100000
             ),
         }
+
+    def get_integration_config(self):
+        """返回宿主无感登录配置；缺省时功能关闭。"""
+        section = self.config['integration'] if self.config.has_section('integration') else {}
+        return {
+            'enabled': str(section.get('enabled', 'no')).lower() in ('yes', '1', 'true', 'on'),
+            'shared_key': section.get('shared_key', '').strip(),
+            'ticket_ttl_seconds': self._positive_int(
+                section.get('ticket_ttl_seconds'),
+                int(DEFAULT_INTEGRATION_CONFIG['ticket_ttl_seconds']), maximum=300
+            ),
+            'max_clock_skew_seconds': self._positive_int(
+                section.get('max_clock_skew_seconds'),
+                int(DEFAULT_INTEGRATION_CONFIG['max_clock_skew_seconds']), maximum=300
+            ),
+        }
+
+    @staticmethod
+    def generate_integration_key():
+        """生成可配置到宿主后端与 DBQuery 两端的高熵共享密钥。"""
+        return secrets.token_urlsafe(48)
+
+    def set_integration_config(self, cfg_dict):
+        section = DEFAULT_INTEGRATION_CONFIG.copy()
+        section.update({
+            'enabled': 'yes' if cfg_dict.get('enabled') else 'no',
+            'shared_key': str(cfg_dict.get('shared_key', '')).strip(),
+            'ticket_ttl_seconds': str(self._positive_int(
+                cfg_dict.get('ticket_ttl_seconds'),
+                int(DEFAULT_INTEGRATION_CONFIG['ticket_ttl_seconds']), maximum=300
+            )),
+            'max_clock_skew_seconds': str(self._positive_int(
+                cfg_dict.get('max_clock_skew_seconds'),
+                int(DEFAULT_INTEGRATION_CONFIG['max_clock_skew_seconds']), maximum=300
+            )),
+        })
+        self.config['integration'] = section
+        self.save_config()
 
     def set_db_config(self, cfg_dict):
         self.config['database'] = cfg_dict
