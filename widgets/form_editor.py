@@ -7,7 +7,7 @@ import os
 import re
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QLineEdit, QPlainTextEdit, QGroupBox, QFormLayout,
+    QLineEdit, QPlainTextEdit, QGroupBox, QFormLayout, QCheckBox,
     QMessageBox, QFileDialog, QSizePolicy
 )
 from PyQt5.QtCore import Qt
@@ -141,6 +141,19 @@ class FormEditorDialog(QDialog):
             loc_form.addRow("文件名:", self.filename_edit)
             layout.addWidget(loc_grp)
 
+        access_row = QHBoxLayout()
+        self.web_enabled_check = QCheckBox(u"允许已登录 Web 用户查看此表单")
+        self.web_enabled_check.setChecked(False)
+        self.web_enabled_check.setToolTip(
+            u"默认不允许。勾选后，已登录的 Web/嵌入页用户才能看到和执行该表单。"
+        )
+        access_hint = QLabel(u"默认关闭，桌面端不受影响")
+        access_hint.setStyleSheet("color: #667085; font-size: 11px;")
+        access_row.addWidget(self.web_enabled_check)
+        access_row.addWidget(access_hint)
+        access_row.addStretch()
+        layout.addLayout(access_row)
+
         # 编辑器
         self.editor = QPlainTextEdit()
         mono_font = QFont("Courier New", 10)
@@ -194,8 +207,26 @@ class FormEditorDialog(QDialog):
         try:
             with open(self.form.file_path, 'r', encoding='utf-8-sig') as f:
                 self.editor.setPlainText(f.read())
+            self.web_enabled_check.setChecked(bool(getattr(self.form, 'web_enabled', False)))
         except Exception as e:
             QMessageBox.warning(self, "读取失败", "无法读取文件：\n{}".format(e))
+
+    def _apply_web_enabled(self, content):
+        """将可视开关安全写入 [meta]，保留其他元数据和旧格式。"""
+        meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content,
+                           re.DOTALL | re.IGNORECASE)
+        if not meta_m:
+            return content
+
+        value = 'true' if self.web_enabled_check.isChecked() else 'false'
+        meta_body = meta_m.group(1)
+        web_line = re.compile(r'^\s*web_enabled\s*=.*$', re.MULTILINE | re.IGNORECASE)
+        if web_line.search(meta_body):
+            meta_body = web_line.sub('web_enabled = ' + value, meta_body)
+        else:
+            meta_body = meta_body.rstrip() + '\nweb_enabled = ' + value + '\n'
+        start, end = meta_m.span(1)
+        return content[:start] + meta_body + content[end:]
 
     def _get_save_path(self):
         """获取保存路径；返回 None 表示用户取消或输入无效"""
@@ -231,7 +262,7 @@ class FormEditorDialog(QDialog):
 
     def _do_save(self, path):
         """执行实际写入"""
-        content = self.editor.toPlainText()
+        content = self._apply_web_enabled(self.editor.toPlainText())
 
         # 提取 query_type（从 [meta] 段的 type 字段）
         query_type = 'select'
@@ -284,6 +315,7 @@ class FormEditorDialog(QDialog):
         try:
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
+            self.editor.setPlainText(content)
             return True
         except Exception as e:
             QMessageBox.critical(self, "保存失败", str(e))
@@ -377,6 +409,12 @@ class FormEditorDialog(QDialog):
   type = exec：仅在调用受控存储过程时使用；[sql] 必须以 EXEC 或 EXECUTE 开头。
   type 写在 [meta] 段，例如：type = exec。
 
+【Web 访问权限】
+  web_enabled = false：默认值；该表单仅可在 EXE 中查看和使用，Web/嵌入页不显示也不能直接访问。
+  web_enabled = true：已登录的 Web 用户可以查看、加载候选项、执行查询和导出。
+  在本窗口直接勾选“允许已登录 Web 用户查看此表单”即可自动写入该配置。
+  Web 用户未登录时，不能查看任何表单或调用查询接口。
+
 【常用属性】
   required 或 required=true      必填；checkbox 必须为 1。
   placeholder=提示文字           输入框提示。
@@ -393,6 +431,7 @@ class FormEditorDialog(QDialog):
   title = 体检人员查询
   group = 综合查询
   description = 按日期、科室和人员信息查询
+  web_enabled = true
 
   [params]
   start_date = 开始日期 | date | {today} | required
@@ -409,7 +448,7 @@ class FormEditorDialog(QDialog):
     AND DoctorID = '{doctor}'
 
 【其他说明】
-  [meta] 可填写 title、group、description；type 默认 select。
+  [meta] 可填写 title、group、description、web_enabled；type 默认 select。
   SELECT 模式仅允许查询；exec 模式仅允许受控存储过程调用。参数中的单引号会自动转义。"""
         dialog = QDialog(self)
         dialog.setWindowTitle("表单格式说明")

@@ -44,6 +44,15 @@
                 </div>
             </div>
             {% endif %}
+            {% if current_user and not hide_header %}
+            <div style="text-align: right; color: #667085; font-size: 13px;">
+                <div>当前账号：{{ current_user }}</div>
+                <form method="post" action="{{ url_for('logout') }}" style="margin-top: 6px;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">退出登录</button>
+                </form>
+            </div>
+            {% endif %}
         </header>
 
         <section class="business-section conditions-section" aria-labelledby="conditions-heading">

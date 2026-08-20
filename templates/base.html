@@ -10,16 +10,19 @@
     {% block head %}{% endblock %}
 </head>
 <body class="{% if embed_mode %}embed-mode{% else %}standalone-mode{% endif %}{% if sidebar_hidden %} sidebar-hidden-mode{% endif %}"
+      data-page="{{ page_name|default('app') }}"
       data-embed-mode="{{ '1' if embed_mode else '0' }}"
       data-sidebar-hidden="{{ '1' if sidebar_hidden else '0' }}">
     <main class="app-body" aria-label="综合查询内容区">
         {% block content %}{% endblock %}
     </main>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    {% if page_name|default('app') != 'login' %}
     <script src="/static/vendor/jquery.min.js"></script>
     <script src="/static/vendor/bootstrap.bundle.min.js"></script>
     <script src="/static/vendor/jquery.dataTables.min.js"></script>
     <script src="/static/js/app.js"></script>
+    {% endif %}
     {% block scripts %}{% endblock %}
 </body>
 </html>

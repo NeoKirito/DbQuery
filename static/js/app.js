@@ -2,6 +2,17 @@
 var lastQueryResult = null;
 var dataTable = null;
 
+function redirectToLogin() {
+    var target = window.location.pathname + window.location.search;
+    window.location.replace('/login?next=' + encodeURIComponent(target));
+}
+
+$(document).ajaxError(function (event, xhr) {
+    if (xhr && xhr.status === 401) {
+        redirectToLogin();
+    }
+});
+
 $(document).ready(function () {
     initializeDefaultValues();
     initializeSearchableSelects();

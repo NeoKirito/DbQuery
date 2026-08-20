@@ -145,6 +145,37 @@ class DBManager:
         except Exception as exc:
             return False, str(exc)
 
+    def authenticate_user(self, username, password):
+        """使用 qx_czyxx 的启用账号验证登录凭据。
+
+        认证查询始终使用参数绑定，避免将账号或密码拼接到 SQL 中；调用方仅获得
+        True/False，不会得到数据库驱动、账号状态或密码字段的细节。
+        """
+        username = str(username or '').strip()
+        password = str(password or '')
+        if not username or not password:
+            return False
+
+        conn = None
+        cursor = None
+        try:
+            conn = self._open_connection(connect_timeout=10)
+            conn.timeout = 10
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT TOP 1 1 FROM qx_czyxx "
+                "WHERE czybm = ? AND [pass] = ? AND czyzt = ? AND deleted = ?",
+                username, password, u'启用', '0'
+            )
+            return cursor.fetchone() is not None
+        except Exception:
+            # 不记录底层驱动异常，避免认证日志意外包含连接或凭据细节。
+            logger.warning('User authentication failed because the credential service is unavailable')
+            return False
+        finally:
+            self._close_quietly(cursor)
+            self._close_quietly(conn)
+
     @staticmethod
     def _is_timeout_error(exc):
         text = str(exc).lower()

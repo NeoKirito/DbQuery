@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block title %}登录综合查询{% endblock %}
+
+{% block head %}
+<style>
+    .login-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: linear-gradient(135deg, #edf4ff 0%, #f7f9fc 50%, #eaf2fb 100%); }
+    .login-card { width: min(100%, 420px); background: #fff; border: 1px solid #d8e1ec; box-shadow: 0 16px 42px rgba(25, 70, 120, .14); border-radius: 12px; padding: 32px; }
+    .login-title { color: #174f86; font-size: 24px; font-weight: 700; margin: 0 0 8px; text-align: center; }
+    .login-subtitle { color: #667085; font-size: 14px; margin: 0 0 24px; text-align: center; }
+    .login-label { display: block; color: #344054; font-weight: 600; margin: 14px 0 6px; }
+    .login-input { width: 100%; box-sizing: border-box; min-height: 40px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 8px 10px; font-size: 14px; }
+    .login-input:focus { border-color: #1a6eb5; outline: 2px solid rgba(26, 110, 181, .14); }
+    .login-error { margin: 14px 0 0; color: #b42318; background: #fef3f2; border: 1px solid #fecdca; border-radius: 6px; padding: 9px 10px; font-size: 13px; }
+    .login-submit { width: 100%; min-height: 42px; margin-top: 22px; border: 0; border-radius: 6px; background: #1a6eb5; color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; }
+    .login-submit:hover { background: #125a99; }
+    .login-note { margin: 18px 0 0; color: #667085; font-size: 12px; line-height: 1.65; }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="login-shell" aria-labelledby="login-title">
+    <form class="login-card" method="post" action="{{ url_for('login', next=next_url) }}" autocomplete="on">
+        <h1 class="login-title" id="login-title">综合查询登录</h1>
+        <p class="login-subtitle">请使用已启用的操作员账号登录后查看查询表单。</p>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next_url }}">
+        <label class="login-label" for="username">账号</label>
+        <input class="login-input" id="username" name="username" type="text" maxlength="64" required autofocus autocomplete="username" placeholder="操作员账号（czybm）">
+        <label class="login-label" for="password">密码</label>
+        <input class="login-input" id="password" name="password" type="password" maxlength="128" required autocomplete="current-password" placeholder="密码">
+        {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
+        <button class="login-submit" type="submit">登录并查看查询项目</button>
+        <p class="login-note">未登录时不能查看表单、候选项、查询结果或导出数据。若当前程序尚未配置数据库，请先在 EXE 登录窗口中完成数据库连接配置。</p>
+    </form>
+</section>
+{% endblock %}

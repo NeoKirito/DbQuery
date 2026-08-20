@@ -27,8 +27,11 @@ class RecordingManager:
 
 class DynamicOptionsWebTests(unittest.TestCase):
     def setUp(self):
-        web_server.app.config.update(TESTING=True)
+        web_server.app.config.update(TESTING=True, SECRET_KEY='dynamic-options-test-secret')
         self.client = web_server.app.test_client()
+        with self.client.session_transaction() as session_state:
+            session_state['auth_user'] = 'tester'
+            session_state['csrf_token'] = 'dynamic-options-csrf'
         self.form = QueryForm()
         self.form.query_type = 'select'
         self.form.sql = "SELECT '{doctor}' AS Doctor, '{hidden}' AS Source"

@@ -229,6 +229,7 @@ def serialize_form(form, base_dir=None):
         'description': form.description,
         'group':       form.group,
         'query_type':  form.query_type,
+        'web_enabled': bool(getattr(form, 'web_enabled', False)),
         'file_path':   fp,
         'params': [
             {
@@ -252,11 +253,20 @@ def serialize_form(form, base_dir=None):
     }
 
 
-def load_all_forms(forms_dir):
-    """加载所有表单，返回按分组组织的 dict（JSON 友好）"""
+def load_all_forms(forms_dir, web_only=False):
+    """加载所有表单，返回按分组组织的 dict（JSON 友好）。
+
+    ``web_only=True`` 时只返回 [meta] 中明确 ``web_enabled = true`` 的表单。
+    默认值保持桌面端兼容：桌面仍可加载和管理全部本地表单。
+    """
     raw = FormParser.load_forms_from_dir(forms_dir)
     base_dir = os.path.dirname(forms_dir)  # 上级目录，路径相对于它（包含 forms/）
     result = {}
     for group, forms in raw.items():
-        result[group] = [serialize_form(f, base_dir) for f in forms]
+        visible_forms = [
+            form for form in forms
+            if not web_only or bool(getattr(form, 'web_enabled', False))
+        ]
+        if visible_forms:
+            result[group] = [serialize_form(f, base_dir) for f in visible_forms]
     return result

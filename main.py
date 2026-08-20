@@ -33,6 +33,7 @@ from form_parser import FormParser, QueryForm
 from widgets.query_tab import QueryTab
 from widgets.config_dialog import ConfigDialog
 from widgets.form_editor import FormEditorDialog
+from widgets.login_dialog import require_desktop_login
 
 # ── 路径常量（exe 和开发模式均有效）──
 if getattr(sys, 'frozen', False):
@@ -806,8 +807,15 @@ QCheckBox::indicator:hover {
 """)
 
     try:
-        logger.info("Creating MainWindow...")
+        logger.info("Showing desktop login dialog...")
+        authenticated_user = require_desktop_login()
+        if not authenticated_user:
+            logger.info("Desktop login cancelled or rejected; exiting without opening MainWindow")
+            return
+
+        logger.info("Creating MainWindow for authenticated user")
         window = MainWindow()
+        window.setWindowTitle(u"数据库查询工具 - {}".format(authenticated_user))
         window.show()
         logger.info("MainWindow shown, entering event loop")
         sys.exit(app.exec_())
