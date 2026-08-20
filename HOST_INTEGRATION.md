@@ -4,7 +4,9 @@
 
 本协议让宿主程序在用户已登录宿主系统后，**不显示 DBQuery 登录界面**地将用户带入 DBQuery Web/iframe。宿主后端把当前用户的 `czybm` 与密码提交给 DBQuery；DBQuery 按现有 `qx_czyxx` 启用账号规则验证成功后，只返回一个一次性短期票据。浏览器通过 iframe 内的 `POST` 消费票据，DBQuery 再建立 HttpOnly Web 会话。
 
-> 用户名、密码和共享密钥均不得放入 iframe URL、前端 JavaScript、浏览器 localStorage、浏览器日志或页面源代码。签名接口必须由**宿主后端**调用。
+> 这是**推荐**的接入方式：共享密钥只保存在宿主后端。用户名、密码和共享密钥均不得放入 iframe URL、浏览器 localStorage、浏览器日志或页面源代码；签名接口必须由**宿主后端**调用。
+
+如果宿主没有后端、只能配置浏览器前端，可使用默认关闭且需 Origin 白名单的兼容模式。具体的 EXE 配置与可复制前端代码见 [FRONTEND_INTEGRATION.md](FRONTEND_INTEGRATION.md)。该模式不使用共享密钥，但仅能使用用户本次登录流程中短暂保留于内存的密码，不能把密码写入前端配置或源码。
 
 ## Configure DBQuery
 

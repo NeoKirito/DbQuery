@@ -111,11 +111,25 @@ class ConfigDialog(QDialog):
         integration_form.addRow("票据有效期:", self.integration_ttl_spin)
         integration_form.addRow("允许时钟偏差:", self.integration_skew_spin)
         integration_hint = QLabel(
-            "<small><i>宿主后端用密钥签名后请求短期票据；浏览器仅通过 iframe POST 消费票据。"
+            "<small><i>推荐方式：宿主后端用密钥签名后请求短期票据；浏览器仅通过 iframe POST 消费票据。"
             "密钥轮换后，请同步更新宿主后端配置。</i></small>"
         )
         integration_hint.setWordWrap(True)
         integration_form.addRow("", integration_hint)
+
+        self.frontend_integration_enabled_check = QCheckBox("启用仅前端无密钥登录（兼容模式）")
+        self.frontend_allowed_origins_edit = QLineEdit()
+        self.frontend_allowed_origins_edit.setPlaceholderText("如: https://portal.example.com, http://127.0.0.1:8080")
+        frontend_hint = QLabel(
+            "<small><i>仅适用于没有宿主后端的场景。必须填写宿主页面的精确 Origin（协议、域名、端口），"
+            "不能填 *、路径或 DBQuery 地址。前端必须在用户本次登录后从内存取账号密码，禁止在配置、URL、"
+            "localStorage 或源码中固化密码。</i></small>"
+        )
+        frontend_hint.setWordWrap(True)
+        integration_form.addRow("", self.frontend_integration_enabled_check)
+        integration_form.addRow("允许的前端 Origin:", self.frontend_allowed_origins_edit)
+        integration_form.addRow("", frontend_hint)
+
         layout.addWidget(integration_grp)
 
         # 按钮区
@@ -177,6 +191,12 @@ class ConfigDialog(QDialog):
         self.integration_key_edit.setText(integration_cfg.get('shared_key', ''))
         self.integration_ttl_spin.setValue(integration_cfg.get('ticket_ttl_seconds', 60))
         self.integration_skew_spin.setValue(integration_cfg.get('max_clock_skew_seconds', 60))
+        self.frontend_integration_enabled_check.setChecked(
+            bool(integration_cfg.get('frontend_enabled'))
+        )
+        self.frontend_allowed_origins_edit.setText(
+            ', '.join(integration_cfg.get('frontend_allowed_origins', []))
+        )
 
     def _build_config_dict(self):
         return {
@@ -195,6 +215,9 @@ class ConfigDialog(QDialog):
             'shared_key': self.integration_key_edit.text().strip(),
             'ticket_ttl_seconds': self.integration_ttl_spin.value(),
             'max_clock_skew_seconds': self.integration_skew_spin.value(),
+            'frontend_enabled': self.frontend_integration_enabled_check.isChecked(),
+            'frontend_allowed_origins': self.frontend_allowed_origins_edit.text().strip(),
+
         }
 
     def _test(self):
@@ -226,8 +249,20 @@ class ConfigDialog(QDialog):
             return
         integration_cfg = self._build_integration_config()
         if integration_cfg['enabled'] and len(integration_cfg['shared_key']) < 32:
-            QMessageBox.warning(self, "提示", "启用宿主无感登录前，请生成并保存至少 32 个字符的共享密钥")
+            QMessageBox.warning(self, "提示", "启用受签名宿主无感登录前，请生成并保存至少 32 个字符的共享密钥")
             return
+        if integration_cfg['frontend_enabled']:
+            from db_manager import DBManager
+            origins = DBManager._parse_allowed_origins(
+                integration_cfg['frontend_allowed_origins']
+            )
+            if not origins:
+                QMessageBox.warning(
+                    self, "提示",
+                    "启用仅前端无密钥登录前，请填写至少一个精确 Origin，例如 https://portal.example.com"
+                )
+                return
         self.db_manager.set_db_config(cfg)
+
         self.db_manager.set_integration_config(integration_cfg)
         self.accept()
