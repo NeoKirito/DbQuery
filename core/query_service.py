@@ -230,8 +230,6 @@ def serialize_form(form, base_dir=None):
         'group':       form.group,
         'query_type':  form.query_type,
         'web_enabled': bool(getattr(form, 'web_enabled', False)),
-        # public_id 仅是表单公开标识，不是文件系统路径。
-        'id':          getattr(form, 'public_id', ''),
         'file_path':   fp,
 
         'params': [

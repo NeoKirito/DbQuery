@@ -38,7 +38,7 @@ DBQuery.exe --web --port 8094
 
 ## 嵌入业务系统
 
-Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。所有内部的表单切换和返回链接会保留当前嵌入参数。
+Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。正式 Frontend Embed V1 在认证成功后进入完整 DBQuery 首页，内部表单切换、条件输入、查询与导出均在 DBQuery 页面内完成。
 
 | 使用场景 | 示例地址 | 页面行为 |
 |---|---|---|
@@ -55,7 +55,17 @@ Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。所�
 
 ### DBQuery Frontend Embed V1
 
-当 PEIS 前端已经在本次登录流程中持有当前用户的账号和密码时，可使用正式的 `DBQueryEmbed` SDK。DBQuery 仍会使用 `qx_czyxx` 独立复核账号、密码、启用和未删除状态；认证成功后只建立 DBQuery 自己的 HttpOnly Session。后续 iframe、查询、动态候选与导出均只使用该 Session，SDK 不会保存密码。
+DBQuery Frontend Embed V1 用于复用 PEIS 前端在本次登录流程中已持有的账号和密码，自动建立 **DBQuery 自己的 Session**，随后将**完整 DBQuery Web 工作台首页**嵌入 iframe。用户进入 iframe 后自行选择表单、填写条件、查询、切换表单和导出；PEIS 不传表单 ID、SQL、查询条件或业务参数。
+
+```text
+PEIS frontend
+  → GET /api/integration/session
+  →（未登录时）POST /api/integration/frontend-login
+  → qx_czyxx 参数化验证
+  → DBQuery HttpOnly Session
+  → iframe.src = /dbquery/
+  → 完整 DBQuery Web UI
+```
 
 生产部署必须先通过 `config.ini` 的 `[integration]` 显式开启此模式。不要在源码、发布包或浏览器配置中保存任何真实账号、密码或生产域名。
 
@@ -71,9 +81,11 @@ frontend_embed_session_minutes = 60
 frame_ancestors = https://peis.example.com
 ```
 
-推荐将 DBQuery 通过同域反向代理挂载在 `/dbquery` 下。若代理会设置 `X-Forwarded-Prefix`，需在 DBQuery 服务进程环境中显式设置 `DBQUERY_TRUST_PROXY_PREFIX=true`；若 HTTPS 在反向代理终止，可设置 `DBQUERY_SESSION_COOKIE_SECURE=true`。跨站 iframe Cookie 还会受浏览器 SameSite/第三方 Cookie 策略约束，因此同域部署优先。
+推荐以同站点反向代理部署：PEIS 位于 `https://peis.example.com/`，DBQuery 位于 `https://peis.example.com/dbquery/`，由 `/dbquery/` 代理到 `http://127.0.0.1:8094/`。这样可避免第三方 Cookie、跨站 iframe、CORS 和 SameSite 的额外复杂度。若代理会设置 `X-Forwarded-Prefix`，需在 DBQuery 服务进程环境中显式设置 `DBQUERY_TRUST_PROXY_PREFIX=true`；若 HTTPS 在反向代理终止，可设置 `DBQUERY_SESSION_COOKIE_SECURE=true`。
 
-原生 JavaScript 的调用只需加载 SDK 并调用 `mount()`：
+#### 原生 JavaScript
+
+在 PEIS 的 HTML 页面中加载 SDK：
 
 ```html
 <script src="/dbquery/static/js/dbquery-embed.js"></script>
@@ -83,8 +95,6 @@ DBQueryEmbed.mount({
   el: '#dbquery',
   username: currentUser.username,
   password: currentUser.password,
-  form: 'person-detail',
-  params: { tjh: currentTjh },
   apiBase: '/dbquery',
   onReady: function () {},
   onError: function (error) { console.error(error.code); }
@@ -92,24 +102,117 @@ DBQueryEmbed.mount({
 </script>
 ```
 
-Vue 中同样只在容器挂载后调用：
+若 PEIS 使用 Vue 2 但不通过 npm 打包 SDK，可在 `public/index.html` 中加入 `<script src="/dbquery/static/js/dbquery-embed.js"></script>`，再通过 `window.DBQueryEmbed` 调用。DBQuery 位于独立地址时也可以使用绝对 SDK URL；生产环境仍优先推荐同站点 `/dbquery`。
 
-```javascript
-onMounted(function () {
-  DBQueryEmbed.mount({
-    el: container.value,
-    username: user.username,
-    password: user.password,
-    form: 'person-detail',
-    params: { tjh: currentTjh.value },
-    apiBase: '/dbquery'
-  });
-});
+#### Vue 2 页面用法
+
+```vue
+<template>
+  <div class="dbquery-wrapper">
+    <div ref="dbqueryContainer" class="dbquery-container"></div>
+  </div>
+</template>
+
+<script>
+export default {
+  name: 'DbQueryPage',
+  data() {
+    return { dbqueryMounted: false }
+  },
+  mounted() {
+    this.mountDbQuery()
+  },
+  beforeDestroy() {
+    // 只销毁 iframe DOM；不要自动 logout，Session 可供下次页面进入复用。
+    if (this.$refs.dbqueryContainer) this.$refs.dbqueryContainer.innerHTML = ''
+  },
+  methods: {
+    async mountDbQuery() {
+      try {
+        await window.DBQueryEmbed.mount({
+          el: this.$refs.dbqueryContainer,
+          username: this.$store.state.user.username,
+          password: this.$store.state.user.password,
+          apiBase: '/dbquery',
+          onReady: () => { this.dbqueryMounted = true },
+          onError: error => { console.error('DBQuery embed error:', error.code) }
+        })
+      } catch (error) {
+        this.$message.error('查询工具加载失败')
+      }
+    }
+  }
+}
+</script>
+
+<style scoped>
+.dbquery-wrapper { width: 100%; height: calc(100vh - 100px); }
+.dbquery-container { width: 100%; height: 100%; }
+</style>
 ```
 
-`mount()` 返回 Promise，并支持 `AUTH_FAILED`、`ORIGIN_DENIED`、`FORM_NOT_FOUND`、`FORM_NOT_WEB_ENABLED`、`INVALID_PARAM`、`NETWORK_ERROR` 和 `SESSION_FAILED` 错误码。调用 `DBQueryEmbed.logout()` 仅清除 DBQuery 的 Session，**不会**清除 PEIS 自身的账号或密码。
+#### 推荐的 Vue 2 复用组件
 
-> 密码仅在建立 Session 的首次 HTTPS `POST /api/integration/frontend-login` 中使用。它不会进入 iframe URL、DOM attribute、Cookie、localStorage、sessionStorage 或 SDK 的持久状态。Origin allowlist 只是浏览器接入限制，不构成宿主身份认证。
+```vue
+<template><div ref="container" class="dbquery-embed"></div></template>
+
+<script>
+export default {
+  name: 'DbQueryEmbed',
+  props: {
+    username: { type: String, required: true },
+    password: { type: String, required: true },
+    apiBase: { type: String, default: '/dbquery' }
+  },
+  mounted() { this.mount() },
+  beforeDestroy() {
+    // 不自动 logout。
+    if (this.$refs.container) this.$refs.container.innerHTML = ''
+  },
+  methods: {
+    async mount() {
+      try {
+        await window.DBQueryEmbed.mount({
+          el: this.$refs.container,
+          username: this.username,
+          password: this.password,
+          apiBase: this.apiBase,
+          onReady: () => this.$emit('ready'),
+          onError: error => this.$emit('error', error)
+        })
+      } catch (error) {
+        this.$emit('error', error)
+      }
+    }
+  }
+}
+</script>
+
+<style scoped>
+.dbquery-embed { width: 100%; height: 100%; min-height: 600px; }
+</style>
+```
+
+PEIS 页面最终可收敛为：
+
+```vue
+<DbQueryEmbed :username="user.username" :password="user.password" />
+```
+
+PEIS 自己退出系统时可显式调用 DBQuery 登出，但失败不能阻断 PEIS 原有退出逻辑：
+
+```javascript
+try {
+  if (window.DBQueryEmbed) await window.DBQueryEmbed.logout({ apiBase: '/dbquery' })
+} catch (error) {
+  console.warn('DBQuery logout failed')
+}
+this.logoutPeis()
+```
+
+`mount()` 返回 Promise，并以 `AUTH_FAILED`、`ORIGIN_DENIED`、`NETWORK_ERROR`、`SESSION_FAILED` 和 `LOAD_FAILED` 表示错误。iframe 会固定指向 DBQuery Web 首页，样式为 `width: 100%`、`height: 100%`、`border: 0`、`display: block`，高度由宿主 container 决定。
+
+> 密码仅在建立 Session 的首次 HTTPS `POST /api/integration/frontend-login` 中使用。它不会进入 iframe URL、DOM attribute、Cookie、localStorage 或 sessionStorage。认证完成后 SDK 不再保存或主动持有 password 引用。DBQuery SDK 不会扫描 PEIS localStorage；如 PEIS 自己使用 localStorage，应由 PEIS 显式读取后作为 `username`、`password` 参数传入。Origin allowlist 只是浏览器接入限制，不构成宿主身份认证。
 
 ## 登录与 Web 表单权限
 
@@ -159,7 +262,6 @@ title = 体检人员查询
 group = 统计报表
 description = 按日期、科室和人员信息查询体检记录
 web_enabled = true
-id = person-detail
 # type = select
 
 [params]
@@ -168,8 +270,6 @@ end_date = 结束日期 | date | {today} | required | width=150
 department = 科室 | select:全部 | 全部 | searchable | options_sql=SELECT DISTINCT Department FROM Employee WHERE Department IS NOT NULL ORDER BY Department
 doctor = 医生 | select | | searchable | options_sql=SELECT DoctorID, DoctorName FROM Doctor WHERE Enabled=1 ORDER BY DoctorName
 keyword = 关键词 | text | | placeholder=姓名、手机号或编号 | width=240px
-# 仅 Embed V1 首次打开时允许宿主预填；hidden 参数永远不能 external_allowed。
-# tjh = 体检号 | text | | external_allowed=true
 remark = 备注 | textarea | | placeholder=可输入多行查询说明
 only_active = 仅查询有效记录 | checkbox | 1
 gender = 性别 | radio:全部,男,女 | 全部
@@ -210,9 +310,7 @@ WHERE CreateDate BETWEEN '{start_date}' AND '{end_date}'
 | `searchable` | `searchable` | 标记可搜索；所有 `select` 已默认启用输入包含匹配。 |
 | `allow_custom` | `allow_custom=true` | 默认 `false`。未开启时，临时搜索文字或不存在的候选项不能进入 SQL。 |
 | `options_sql` | `options_sql=SELECT DoctorID, DoctorName FROM Doctor` | 只允许单条只读 `SELECT`。一列时为 `value=label`；两列时第一列为 `value`、第二列为 `label`；SQL 永远不下发到浏览器。 |
-| `external_allowed` | `external_allowed=true` | 默认 `false`。只有该非 hidden 参数可由 Embed V1 在 iframe 初始打开时预填，且仍经过服务端类型与候选项校验。 |
 | `web_enabled`（`[meta]`） | `web_enabled = true` | 默认 `false`；仅明确为 `true` 的表单对已登录 Web 用户开放。 |
-| `id`（`[meta]`） | `id = person-detail` | 稳定公开表单 ID，仅允许小写字母、数字、`_`、`-`。Embed V1 从不接受 `.qry` 文件路径。 |
 
 静态 `select:` 候选项与 `options_sql` 返回项可并存，按 **value** 的首次出现顺序合并去重。动态候选加载采用短生命周期连接、10 秒查询超时和最多 1000 项保护；失败时保留静态项，并提示“候选数据加载失败，可刷新重试”。浏览器只接收 `dynamic_options: true` 标记，并只提交表单定位信息与参数名加载候选；`options_sql` 永远保留在服务端，绝不接受客户端提交的候选 SQL。
 
@@ -228,7 +326,7 @@ Excel 导出使用当前已经查询到的结果，并按“查询项目标题_�
 
 `FormParser.is_safe_sql()` 仍保留并持续用于所有 Web 查询请求。`select` 类型仅允许以 `SELECT` 开头的查询，`exec` 类型仅允许受控的存储过程调用；此项改造没有删除或削弱现有检查。
 
-本项目提供基于 `qx_czyxx` 的服务端账号密码认证、HttpOnly 会话、表单 Web 显式授权、登录限流、未认证 API 拦截、后端签名 HMAC 一次性票据集成，以及默认关闭的 Frontend Embed V1。Embed V1 使用精确 Origin allowlist、可配置 CSP `frame-ancestors`、会话期限和可选 Secure Cookie；它不会削弱 SQL 安全检查、`web_enabled` 或 `external_allowed` 门控。项目不内置 TLS 终止、企业身份联邦、最小权限数据库账号或反向代理的现场配置；生产发布前仍须由部署与安全负责人完成 HTTPS、代理信任边界、Cookie 策略和凭据轮换评估。
+本项目提供基于 `qx_czyxx` 的服务端账号密码认证、HttpOnly 会话、表单 Web 显式授权、登录限流、未认证 API 拦截、后端签名 HMAC 一次性票据集成，以及默认关闭的 Frontend Embed V1。Embed V1 使用精确 Origin allowlist、可配置 CSP `frame-ancestors`、会话期限和可选 Secure Cookie；它不会削弱 SQL 安全检查或 `web_enabled` 门控。项目不内置 TLS 终止、企业身份联邦、最小权限数据库账号或反向代理的现场配置；生产发布前仍须由部署与安全负责人完成 HTTPS、代理信任边界、Cookie 策略和凭据轮换评估。
 
 ## 打包与现场升级
 

@@ -1,57 +1,49 @@
-/* DBQuery Frontend Embed V1：仅使用当前调用的凭据建立 DBQuery Session。 */
+/* DBQuery Frontend Embed V1：使用当前宿主凭据建立 DBQuery Session 后嵌入完整工作台。 */
 (function (global) {
     'use strict';
 
-    var lastApiBase = '';
+    var lastApiBase = null;
     var ERROR_MESSAGES = {
-        AUTH_FAILED: '账号验证失败',
-        ORIGIN_DENIED: '当前页面来源未获 DBQuery 授权',
-        FORM_NOT_FOUND: '当前表单不可访问',
-        FORM_NOT_WEB_ENABLED: '当前表单不可访问',
-        INVALID_PARAM: '嵌入参数无效',
-        NETWORK_ERROR: 'DBQuery 加载失败',
-        SESSION_FAILED: 'DBQuery 会话建立失败'
+        AUTH_FAILED: '查询工具加载失败',
+        ORIGIN_DENIED: '查询工具加载失败',
+        NETWORK_ERROR: '查询工具加载失败',
+        SESSION_FAILED: '查询工具加载失败',
+        LOAD_FAILED: '查询工具加载失败'
     };
 
     function inferApiBase() {
         var scripts = document.getElementsByTagName('script');
         var script = document.currentScript;
         if (!script) {
-            for (var i = scripts.length - 1; i >= 0; i--) {
-                if ((scripts[i].src || '').indexOf('/static/js/dbquery-embed.js') >= 0) {
-                    script = scripts[i];
+            for (var index = scripts.length - 1; index >= 0; index--) {
+                if ((scripts[index].src || '').indexOf('/static/js/dbquery-embed.js') >= 0) {
+                    script = scripts[index];
                     break;
                 }
             }
         }
         if (!script || !script.src) return '';
         var marker = '/static/js/dbquery-embed.js';
-        var index = script.src.indexOf(marker);
-        return index >= 0 ? script.src.slice(0, index) : '';
+        var markerIndex = script.src.indexOf(marker);
+        return markerIndex >= 0 ? script.src.slice(0, markerIndex) : '';
     }
 
     function normalizeApiBase(value) {
         var raw = value === undefined || value === null || value === '' ? inferApiBase() : String(value);
-        if (!raw) return '';
-        return raw.replace(/\/$/, '');
+        return raw ? raw.replace(/\/+$/, '') : '';
     }
 
-    function apiUrl(apiBase, path) {
-        return apiBase + path;
+    function joinUrl(apiBase, path) {
+        return (apiBase || '') + path;
     }
 
-    function iframeUrl(apiBase, path) {
-        var value = String(path || '');
-        if (/^https?:\/\//i.test(value)) return value;
-        // Flask url_for 在 SCRIPT_NAME 存在时已生成带 /dbquery 前缀的路径。
-        if (apiBase && (value === apiBase || value.indexOf(apiBase + '/') === 0)) return value;
-        return apiUrl(apiBase, value);
+    function homeUrl(apiBase) {
+        return apiBase ? apiBase + '/' : '/';
     }
 
     function findContainer(el) {
         if (typeof el === 'string') return document.querySelector(el);
-        if (el && el.nodeType === 1) return el;
-        return null;
+        return el && el.nodeType === 1 ? el : null;
     }
 
     function embedError(code, message) {
@@ -66,7 +58,7 @@
         var element = document.createElement('div');
         element.className = 'dbquery-embed-status dbquery-embed-error';
         element.setAttribute('role', 'alert');
-        element.textContent = ERROR_MESSAGES[error.code] || 'DBQuery 加载失败';
+        element.textContent = ERROR_MESSAGES[error.code] || '查询工具加载失败';
         container.appendChild(element);
     }
 
@@ -81,7 +73,7 @@
     }
 
     function request(apiBase, path, options) {
-        return fetch(apiUrl(apiBase, path), {
+        return fetch(joinUrl(apiBase, path), {
             method: options.method || 'GET',
             mode: 'cors',
             credentials: 'include',
@@ -90,8 +82,10 @@
         }).then(function (response) {
             return response.json().catch(function () { return {}; }).then(function (payload) {
                 if (!response.ok) {
-                    throw embedError(payload.error_type || (response.status === 403 ? 'ORIGIN_DENIED' : 'NETWORK_ERROR'),
-                                     payload.error);
+                    throw embedError(
+                        payload.error_type || (response.status === 403 ? 'ORIGIN_DENIED' : 'NETWORK_ERROR'),
+                        payload.error
+                    );
                 }
                 return payload;
             });
@@ -101,15 +95,6 @@
         });
     }
 
-    function validateOptions(options) {
-        if (!options || typeof options !== 'object') throw embedError('SESSION_FAILED', '缺少嵌入配置。');
-        if (!findContainer(options.el)) throw embedError('SESSION_FAILED', '未找到嵌入容器。');
-        if (!String(options.form || '').trim()) throw embedError('FORM_NOT_FOUND', '缺少表单 ID。');
-        if (options.params !== undefined && (!options.params || typeof options.params !== 'object' || Array.isArray(options.params))) {
-            throw embedError('INVALID_PARAM');
-        }
-    }
-
     function notifyError(onError, error) {
         if (typeof onError === 'function') {
             try { onError(error); } catch (ignore) {}
@@ -117,30 +102,52 @@
         return Promise.reject(error);
     }
 
+    function createIframe(container, apiBase, loading, onReady) {
+        return new Promise(function (resolve, reject) {
+            var iframe = document.createElement('iframe');
+            iframe.className = 'dbquery-embed-frame';
+            iframe.title = 'DBQuery';
+            iframe.setAttribute('frameborder', '0');
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = '0';
+            iframe.style.display = 'block';
+            iframe.onload = function () {
+                if (loading && loading.parentNode) loading.parentNode.removeChild(loading);
+                if (onReady) {
+                    try { onReady({iframe: iframe}); } catch (ignore) {}
+                }
+                resolve({iframe: iframe});
+            };
+            iframe.onerror = function () {
+                reject(embedError('LOAD_FAILED'));
+            };
+            // 认证完成后固定进入完整 DBQuery Web 首页；不传 form、params 或业务条件。
+            iframe.src = homeUrl(apiBase);
+            container.appendChild(iframe);
+        });
+    }
+
     function mount(options) {
-        try {
-            validateOptions(options);
-        } catch (error) {
-            var invalidContainer = options && findContainer(options.el);
-            var invalidOnError = options && options.onError;
-            displayError(invalidContainer, error);
-            return notifyError(invalidOnError, error);
+        var container = options && findContainer(options.el);
+        var invalidOnError = options && options.onError;
+        if (!options || typeof options !== 'object' || !container) {
+            var invalidError = embedError('SESSION_FAILED');
+            displayError(container, invalidError);
+            return notifyError(invalidOnError, invalidError);
         }
 
-        var container = findContainer(options.el);
         var apiBase = normalizeApiBase(options.apiBase);
         var username = String(options.username || '').trim();
-        // 仅保存至此异步调用链；不会写入 DOM、URL、Cookie 或浏览器存储。
+        // 仅在当前认证异步链中临时保存；不会写入 URL、DOM、Cookie 或浏览器存储。
         var password = String(options.password || '');
-        var formId = String(options.form).trim();
-        var params = options.params || {};
         var onReady = typeof options.onReady === 'function' ? options.onReady : null;
         var onError = typeof options.onError === 'function' ? options.onError : null;
-        // 避免 Promise、iframe onload 或错误回调继续持有调用者的原始配置对象。
+        // 后续 Promise 和 iframe 回调不再保留调用者原始 options（可能含密码）的引用。
         options = null;
         var loading = displayLoading(container);
 
-        var flow = request(apiBase, '/api/integration/session', {method: 'GET'})
+        return request(apiBase, '/api/integration/session', {method: 'GET'})
             .then(function (sessionState) {
                 if (sessionState.authenticated) return sessionState;
                 if (!username || !password) throw embedError('AUTH_FAILED');
@@ -149,51 +156,33 @@
                 });
             })
             .then(function () {
-                // 登录请求已完成；SDK 不保留凭据引用。
+                // 认证完成后 SDK 不再保存或主动持有 password 引用。
                 username = '';
                 password = '';
-                return request(apiBase, '/api/integration/embed-url', {
-                    method: 'POST', body: {form: formId, params: params}
-                });
+                // 根路径以 '/' 作为可恢复的来源值保存，避免 logout 将空字符串重新推断为脚本地址。
+                lastApiBase = apiBase || '/';
+                return createIframe(container, apiBase, loading, onReady);
             })
-            .then(function (payload) {
-                if (!payload.embed_url) throw embedError('SESSION_FAILED');
-                lastApiBase = apiBase;
-                var iframe = document.createElement('iframe');
-                iframe.className = 'dbquery-embed-frame';
-                iframe.title = 'DBQuery 查询工具';
-                iframe.setAttribute('frameborder', '0');
-                iframe.style.width = '100%';
-                iframe.style.height = '100%';
-                iframe.style.minHeight = '420px';
-                iframe.style.border = '0';
-                iframe.onload = function () {
-                    if (loading && loading.parentNode) loading.parentNode.removeChild(loading);
-                    if (onReady) {
-                        try { onReady({iframe: iframe}); } catch (ignore) {}
-                    }
-                };
-                // 服务端仅会签发公开表单 ID 和 external_allowed 的业务参数；绝无密码。
-                iframe.src = iframeUrl(apiBase, payload.embed_url);
-                container.appendChild(iframe);
-                return {iframe: iframe};
+            .catch(function (error) {
+                username = '';
+                password = '';
+                displayError(container, error);
+                return notifyError(onError, error);
             });
-
-        return flow.catch(function (error) {
-            // 失败时同样释放当前调用中对凭据的引用。
-            username = '';
-            password = '';
-            displayError(container, error);
-            return notifyError(onError, error);
-        });
     }
 
     function logout(options) {
-        var apiBase = normalizeApiBase(
-            typeof options === 'string' ? options : (options && options.apiBase) || lastApiBase
-        );
+        var source;
+        if (typeof options === 'string') {
+            source = options;
+        } else if (options && Object.prototype.hasOwnProperty.call(options, 'apiBase')) {
+            source = options.apiBase;
+        } else {
+            source = lastApiBase;
+        }
+        var apiBase = normalizeApiBase(source);
         return request(apiBase, '/api/integration/logout', {method: 'POST'}).then(function (payload) {
-            lastApiBase = '';
+            lastApiBase = null;
             return payload;
         });
     }

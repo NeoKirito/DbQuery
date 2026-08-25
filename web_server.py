@@ -9,14 +9,13 @@ import hashlib
 import hmac
 import logging
 import os
-import re
 import secrets
 
 import sys
 import tempfile
 import threading
 import time
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote
 
 from flask import (Flask, jsonify, make_response, redirect, render_template, request,
                    send_file, session, url_for)
@@ -37,7 +36,7 @@ from form_parser import FormParser
 from core.query_service import build_final_sql, export_to_excel, load_all_forms, serialize_form
 from core.param_service import (
     OptionsLoadError, ParameterError, RequiredParameterError, load_options,
-    normalize_params, normalize_value, static_options
+    normalize_params, static_options
 )
 
 logging.basicConfig(
@@ -92,8 +91,6 @@ app.config.update(
     SESSION_COOKIE_SECURE=_env_flag('DBQUERY_SESSION_COOKIE_SECURE', False),
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=8),
 )
-
-FORM_ID_PATTERN = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_FAILURES = {}
@@ -301,55 +298,6 @@ def _session_is_authenticated():
             session.clear()
             return False
     return True
-
-
-def _get_web_form_by_id(form_id):
-    """通过唯一公开 ID 查找表单，绝不将浏览器输入解释为文件路径。"""
-    normalized_id = str(form_id or '').strip().lower()
-    if not FORM_ID_PATTERN.match(normalized_id):
-        return None, 'FORM_NOT_FOUND'
-
-    matches = []
-    for forms in FormParser.load_forms_from_dir(FORMS_DIR).values():
-        for form in forms:
-            configured_id = str(getattr(form, 'public_id', '') or '').strip().lower()
-            if configured_id == normalized_id:
-                matches.append(form)
-    if len(matches) != 1:
-        return None, 'FORM_NOT_FOUND'
-    if not bool(getattr(matches[0], 'web_enabled', False)):
-        return None, 'FORM_NOT_WEB_ENABLED'
-    return matches[0], None
-
-
-def _validate_external_embed_params(form, supplied_params):
-    """仅允许显式 external_allowed 的非 hidden 参数进入 iframe 初始 URL。"""
-    if supplied_params is None:
-        return {}, None
-    if not isinstance(supplied_params, dict):
-        return None, 'INVALID_PARAM'
-
-    options_by_name, _ = form_options(form, DBManager())
-    normalized = {}
-    for param in form.params:
-        if param.name not in supplied_params:
-            continue
-        # 未声明或 hidden 的字段不覆盖 .qry 默认值；未知字段同样被忽略。
-        if param.ptype == 'hidden' or not bool(getattr(param, 'external_allowed', False)):
-            continue
-        try:
-            options = options_by_name.get(param.name)
-            normalized[param.name] = normalize_value(param, supplied_params[param.name], options=options)
-        except ParameterError:
-            return None, 'INVALID_PARAM'
-    return normalized, None
-
-
-def _build_embed_url(form_id, external_params):
-    query = [('embed', '1'), ('sidebar', '0')]
-    for name in sorted(external_params):
-        query.append((name, external_params[name]))
-    return '{}?{}'.format(url_for('embed_page', form_id=form_id), urlencode(query))
 
 
 def _consume_integration_ticket(ticket):
@@ -565,37 +513,6 @@ def frontend_embed_login():
     }), origin)
 
 
-@app.route('/api/integration/embed-url', methods=['POST', 'OPTIONS'])
-def frontend_embed_url():
-    """验证公开 form ID 与受控参数后，返回不含凭据的 iframe 地址。"""
-    _, origin, failure = _frontend_embed_config()
-    if failure is not None:
-        return failure
-    if request.method == 'OPTIONS':
-        return _frontend_embed_cors_response(('', 204), origin)
-    if not _session_is_authenticated():
-        return _frontend_embed_error('DBQuery 会话无效，请重新登录。', 401,
-                                     'SESSION_FAILED', origin)
-
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return _frontend_embed_error('嵌入请求格式无效。', 400, 'FORM_NOT_FOUND', origin)
-    form_id = str(data.get('form') or '').strip().lower()
-    form, form_error = _get_web_form_by_id(form_id)
-    if form is None:
-        message = '当前表单不可访问。'
-        status = 403 if form_error == 'FORM_NOT_WEB_ENABLED' else 404
-        return _frontend_embed_error(message, status, form_error, origin)
-
-    external_params, param_error = _validate_external_embed_params(form, data.get('params'))
-    if param_error:
-        return _frontend_embed_error('嵌入参数无效。', 400, param_error, origin)
-    return _frontend_embed_cors_response(jsonify({
-        'success': True,
-        'embed_url': _build_embed_url(form_id, external_params),
-    }), origin)
-
-
 @app.route('/api/integration/logout', methods=['POST', 'OPTIONS'])
 def frontend_embed_logout():
     """只清除 DBQuery Session，不触碰宿主系统的认证状态或凭据。"""
@@ -721,39 +638,6 @@ def query_page(file_path):
         'query.html',
         form=serialize_form(form, BASE_DIR),
         file_path=decoded_path,
-        csrf_token=_csrf_token(),
-        **page_context
-    )
-
-
-@app.route('/embed/<form_id>')
-@login_required
-def embed_page(form_id):
-    """通过公开表单 ID 打开已授权表单，并仅接收白名单的外部预填参数。"""
-    form, form_error = _get_web_form_by_id(form_id)
-    if form is None:
-        status = 403 if form_error == 'FORM_NOT_WEB_ENABLED' else 404
-        return error_response('当前表单不可访问。', status, form_error)
-
-    supplied_params = {
-        param.name: request.args.get(param.name)
-        for param in form.params if param.name in request.args
-    }
-    normalized_params, param_error = _validate_external_embed_params(form, supplied_params)
-    if param_error:
-        return error_response('嵌入参数无效。', 400, param_error)
-
-    form_data = serialize_form(form, BASE_DIR)
-    for param in form_data['params']:
-        if param['name'] in normalized_params:
-            param['default'] = normalized_params[param['name']]
-            param['raw_default'] = normalized_params[param['name']]
-
-    page_context = get_embed_context()
-    return render_template(
-        'query.html',
-        form=form_data,
-        file_path=form_data['file_path'],
         csrf_token=_csrf_token(),
         **page_context
     )

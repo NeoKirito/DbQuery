@@ -1,8 +1,61 @@
 # DBQuery 仅前端无密钥无感登录
 
-> **兼容模式（不建议新接入使用）。** 本文档描述历史 `frontend-ticket` → 隐藏 form → `/sso/consume` 流程，接口继续保留以避免破坏已有集成。新的 PEIS 前端应优先使用 README 中的 **DBQuery Frontend Embed V1**：它直接建立 DBQuery Session、提供 `DBQueryEmbed.mount()` 与 `DBQueryEmbed.logout()`，并使用公开 form ID 和 `external_allowed` 参数门控。
+> **以下“历史兼容模式”章节不建议新接入使用。** 它描述旧 `frontend-ticket` → 隐藏 form → `/sso/consume` 流程；接口继续保留以避免破坏已有集成。新 PEIS 接入应使用下方精简的 **DBQuery Frontend Embed V1**。
 
-## 适用范围
+## DBQuery Frontend Embed V1（新接入）
+
+Frontend Embed V1 只做一件事：PEIS 显式传入当前账号和密码，DBQuery 独立验证后建立自己的 Session，再将**完整 DBQuery Web 首页**放入 iframe。用户在 DBQuery 内自行选择表单、输入条件、查询、切换和导出；PEIS 不传业务参数、查询条件、表单 ID 或 SQL。
+
+```html
+<script src="/dbquery/static/js/dbquery-embed.js"></script>
+<div id="dbquery" style="height: 100%"></div>
+<script>
+DBQueryEmbed.mount({
+  el: '#dbquery',
+  username: currentUser.username,
+  password: currentUser.password,
+  apiBase: '/dbquery'
+})
+</script>
+```
+
+认证成功后的 iframe 地址为 `/dbquery/`，而不是某个指定表单地址。若已存在 DBQuery Session，SDK 只检查 `/api/integration/session` 并直接创建 iframe，不会重复发送账号密码。`DBQueryEmbed.logout({ apiBase: '/dbquery' })` 只退出 DBQuery，不会修改 PEIS 的 localStorage、token 或用户状态。
+
+### Vue 2 用法
+
+在 PEIS 的 `public/index.html` 中加入：
+
+```html
+<script src="/dbquery/static/js/dbquery-embed.js"></script>
+```
+
+页面组件可直接使用：
+
+```vue
+<template><div ref="container" class="dbquery-container"></div></template>
+<script>
+export default {
+  mounted() {
+    window.DBQueryEmbed.mount({
+      el: this.$refs.container,
+      username: this.$store.state.user.username,
+      password: this.$store.state.user.password,
+      apiBase: '/dbquery',
+      onError: error => this.$message.error('查询工具加载失败')
+    })
+  },
+  beforeDestroy() {
+    // 只移除 iframe；不要自动 logout，便于用户下次进入复用 Session。
+    if (this.$refs.container) this.$refs.container.innerHTML = ''
+  }
+}
+</script>
+<style scoped>.dbquery-container { width: 100%; height: 100%; min-height: 600px; }</style>
+```
+
+DBQuery SDK 不扫描 PEIS localStorage。如果 PEIS 自己保存凭据，应由 PEIS 显式读取后作为 `username` 和 `password` 传入。密码只用于首次 HTTPS POST；认证完成后 SDK 不再保存或主动持有 password 引用，且不会将其写入 URL、iframe `src`、DOM 或浏览器存储。
+
+## 历史兼容模式的适用范围
 
 此模式适用于宿主系统**只有浏览器前端配置、没有可保存共享密钥的宿主后端**的情况。宿主页面在自己的用户完成登录后，以该用户本次登录取得的 `czybm` 与密码向 DBQuery 交换一个**一次性、短时有效**的 ticket；随后由隐藏表单将 ticket `POST` 到 iframe，DBQuery 创建会话并直接显示目标表单。
 
