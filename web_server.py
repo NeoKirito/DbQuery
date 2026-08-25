@@ -16,7 +16,7 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import unquote, urlencode
+from urllib.parse import unquote, urlparse
 
 from flask import (Flask, jsonify, make_response, redirect, render_template, request,
                    send_file, session, url_for)
@@ -72,26 +72,67 @@ def _session_same_site():
     return value if value in ('Lax', 'Strict', 'None') else 'Lax'
 
 
+def _session_cookie_name():
+    """Return an isolated Flask session cookie name without accepting cookie-header delimiters."""
+    value = os.environ.get('DBQUERY_SESSION_COOKIE_NAME', 'dbquery_session').strip()
+    if not value or any(character in value for character in '()<>@,;:\\"/[]?={} \t'):
+        logger.warning('Invalid DBQUERY_SESSION_COOKIE_NAME; using dbquery_session')
+        return 'dbquery_session'
+    return value
+
+
+def _session_cookie_path():
+    """Allow /dbquery reverse-proxy scoping while retaining / for standalone deployments."""
+    value = os.environ.get('DBQUERY_SESSION_COOKIE_PATH', '/').strip() or '/'
+    if (not value.startswith('/') or value.startswith('//') or
+            any(ord(character) in (10, 13, 59) for character in value)):
+        logger.warning('Invalid DBQUERY_SESSION_COOKIE_PATH; using /')
+        return '/'
+    return value.rstrip('/') or '/'
+
+
+def _configure_session_cookie(flask_app):
+    same_site = _session_same_site()
+    secure = _env_flag('DBQUERY_SESSION_COOKIE_SECURE', False)
+    if same_site == 'None' and not secure:
+        logger.warning('DBQUERY_SESSION_COOKIE_SAMESITE=None requires Secure=true for cross-site browser cookies')
+    flask_app.config.update(
+        SESSION_COOKIE_NAME=_session_cookie_name(),
+        SESSION_COOKIE_PATH=_session_cookie_path(),
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE=same_site,
+        SESSION_COOKIE_SECURE=secure,
+    )
+
+
+def _proxy_fix_options():
+    """Keep reverse-proxy prefix and client-address trust as independent, one-hop opt-ins."""
+    options = {}
+    if _env_flag('DBQUERY_TRUST_PROXY_PREFIX', False):
+        options['x_prefix'] = 1
+    if _env_flag('DBQUERY_TRUST_PROXY_FOR', False):
+        options['x_for'] = 1
+    return options
+
+
 app = Flask(
     __name__,
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
-# 只有部署人员显式信任反向代理前缀时才处理 X-Forwarded-Prefix，避免直连请求伪造前缀。
-if _env_flag('DBQUERY_TRUST_PROXY_PREFIX', False):
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
+# Proxy prefix and client-address trust are separate controls. Never trust X-Forwarded-For by default.
+_proxy_options = _proxy_fix_options()
+if _proxy_options:
+    app.wsgi_app = ProxyFix(app.wsgi_app, **_proxy_options)
 app.json_provider_class = DBQueryJSONProvider
 app.json = DBQueryJSONProvider(app)
 # 未配置显式环境变量时，每次服务启动生成新的高熵密钥；服务重启后要求重新登录。
 # 这避免将会话密钥写入 .qry、模板或前端链接。
 app.config.update(
     SECRET_KEY=os.environ.get('DBQUERY_SESSION_SECRET') or secrets.token_urlsafe(32),
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE=_session_same_site(),
-    # HTTPS 反向代理可通过 DBQUERY_SESSION_COOKIE_SECURE=true 启用 Secure 属性。
-    SESSION_COOKIE_SECURE=_env_flag('DBQUERY_SESSION_COOKIE_SECURE', False),
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=8),
 )
+_configure_session_cookie(app)
 
 FORM_ID_PATTERN = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 
@@ -104,34 +145,42 @@ _LOGIN_WINDOW_SECONDS = 300
 _INTEGRATION_LOCK = threading.Lock()
 _INTEGRATION_NONCES = {}
 _INTEGRATION_TICKETS = {}
+_EMBED_CONTEXTS = {}
 _INTEGRATION_MAX_BODY_LENGTH = 8192
+_EMBED_CONTEXT_TTL_SECONDS = min(300, max(30, int(os.environ.get('DBQUERY_EMBED_CONTEXT_TTL_SECONDS', '120'))))
 
 
-def _client_key():
-    return request.remote_addr or 'unknown'
+def _normalized_login_username(username):
+    """Normalize only the rate-limit namespace; authentication retains its original username value."""
+    return str(username or '').strip().casefold()[:64] or '<empty>'
 
 
-def _login_allowed():
+def _client_key(username):
+    # request.remote_addr is supplied by the WSGI server unless DBQUERY_TRUST_PROXY_FOR explicitly enables ProxyFix.
+    return '{}|{}'.format(request.remote_addr or 'unknown', _normalized_login_username(username))
+
+
+def _login_allowed(username):
     now = time.monotonic()
-    key = _client_key()
+    key = _client_key(username)
     with _LOGIN_LOCK:
         history = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
         _LOGIN_FAILURES[key] = history
         return len(history) < _LOGIN_LIMIT
 
 
-def _record_login_failure():
+def _record_login_failure(username):
     now = time.monotonic()
-    key = _client_key()
+    key = _client_key(username)
     with _LOGIN_LOCK:
         history = [stamp for stamp in _LOGIN_FAILURES.get(key, []) if now - stamp < _LOGIN_WINDOW_SECONDS]
         history.append(now)
         _LOGIN_FAILURES[key] = history
 
 
-def _clear_login_failures():
+def _clear_login_failures(username):
     with _LOGIN_LOCK:
-        _LOGIN_FAILURES.pop(_client_key(), None)
+        _LOGIN_FAILURES.pop(_client_key(username), None)
 
 
 def _safe_next_url(value):
@@ -149,7 +198,7 @@ def _integration_canonical_request(timestamp, nonce, username, password):
 
 def _purge_integration_state(now=None):
     now = time.time() if now is None else now
-    for bucket in (_INTEGRATION_NONCES, _INTEGRATION_TICKETS):
+    for bucket in (_INTEGRATION_NONCES, _INTEGRATION_TICKETS, _EMBED_CONTEXTS):
         for key, item in list(bucket.items()):
             expires_at = item if isinstance(item, (int, float)) else item.get('expires_at', 0)
             if expires_at <= now:
@@ -245,19 +294,49 @@ def _frontend_ticket_error(message, status, error_type, origin):
     return _frontend_cors_response(_integration_error(message, status, error_type), origin)
 
 
-def _frontend_embed_config():
-    """验证 Frontend Embed V1 是否显式启用及浏览器来源是否获准。"""
+def _request_origin_from_host():
+    """Build the current request origin for conservative legacy-browser same-origin fallback."""
+    return '{}://{}'.format(request.scheme.lower(), request.host.lower().rstrip('/'))
+
+
+def _safe_same_origin_session_probe(cfg):
+    """Allow only a browser-shaped, non-mutating same-origin GET when Origin is absent."""
+    fetch_site = request.headers.get('Sec-Fetch-Site', '').strip().lower()
+    if fetch_site:
+        # Explicit cross-site and same-site (but cross-origin) requests never bypass the allowlist.
+        return fetch_site == 'same-origin'
+
+    referer = request.headers.get('Referer', '').strip()
+    if referer:
+        parsed = urlparse(referer)
+        if parsed.scheme.lower() in ('http', 'https') and parsed.netloc:
+            return '{}://{}'.format(parsed.scheme.lower(), parsed.netloc.lower()) == _request_origin_from_host()
+
+    # Very old browsers may not emit Fetch Metadata or Referer. Permit only when the addressed server origin itself
+    # is explicitly configured as an allowed host, or when an existing DBQuery session already binds the browser.
+    return (_request_origin_from_host() in cfg['frontend_embed_allowed_origins'] or
+            _session_is_authenticated())
+
+
+def _frontend_embed_config(allow_same_origin_session_probe=False):
+    """Validate Embed V1 feature state and exact Origin; only GET /session has a narrow same-origin fallback."""
     cfg = DBManager().get_integration_config()
     origin = request.headers.get('Origin', '').strip().lower().rstrip('/')
     if not cfg.get('frontend_embed_enabled') or not cfg.get('frontend_embed_allowed_origins'):
         return None, None, _integration_error(
             'Frontend Embed 尚未启用。', 403, 'SESSION_FAILED'
         )
-    if not origin or origin not in cfg['frontend_embed_allowed_origins']:
-        return None, None, _integration_error(
-            '宿主前端来源未获授权。', 403, 'ORIGIN_DENIED'
-        )
-    return cfg, origin, None
+    if origin:
+        if origin not in cfg['frontend_embed_allowed_origins']:
+            return None, None, _integration_error(
+                '宿主前端来源未获授权。', 403, 'ORIGIN_DENIED'
+            )
+        return cfg, origin, None
+    if allow_same_origin_session_probe and _safe_same_origin_session_probe(cfg):
+        return cfg, None, None
+    return None, None, _integration_error(
+        '宿主前端来源未获授权。', 403, 'ORIGIN_DENIED'
+    )
 
 
 def _frontend_embed_cors_response(response, origin, methods='POST, OPTIONS'):
@@ -345,11 +424,51 @@ def _validate_external_embed_params(form, supplied_params):
     return normalized, None
 
 
-def _build_embed_url(form_id, external_params):
-    query = [('embed', '1'), ('sidebar', '0')]
-    for name in sorted(external_params):
-        query.append((name, external_params[name]))
-    return '{}?{}'.format(url_for('embed_page', form_id=form_id), urlencode(query))
+def _embed_session_binding():
+    """Create a per-DBQuery-session context binding without exposing it to callers or URLs."""
+    binding = session.get('embed_session_id')
+    if not binding:
+        binding = secrets.token_urlsafe(24)
+        session['embed_session_id'] = binding
+    return binding
+
+
+def _issue_embed_context(form_id, normalized_params):
+    """Store server-validated prefill values under a high-entropy, short-lived session-bound context token."""
+    context_token = secrets.token_urlsafe(32)
+    with _INTEGRATION_LOCK:
+        _purge_integration_state()
+        _EMBED_CONTEXTS[context_token] = {
+            'username': session.get('auth_user', ''),
+            'session_binding': _embed_session_binding(),
+            'form_id': form_id,
+            'params': dict(normalized_params),
+            'expires_at': time.time() + _EMBED_CONTEXT_TTL_SECONDS,
+        }
+    return context_token
+
+
+def _read_embed_context(context_token, form_id):
+    """Allow repeat iframe loads only during the short TTL, and only for the issuing user/session/form."""
+    token = str(context_token or '')
+    if not re.match(r'^[A-Za-z0-9_-]{32,128}$', token):
+        return None, 'INVALID_EMBED_CONTEXT'
+    with _INTEGRATION_LOCK:
+        _purge_integration_state()
+        context = _EMBED_CONTEXTS.get(token)
+        if not context:
+            return None, 'INVALID_EMBED_CONTEXT'
+        if (context.get('form_id') != form_id or
+                context.get('username') != session.get('auth_user', '') or
+                not hmac.compare_digest(str(context.get('session_binding', '')), _embed_session_binding())):
+            return None, 'INVALID_EMBED_CONTEXT'
+        return dict(context.get('params') or {}), None
+
+
+def _build_embed_url(form_id, context_token):
+    return '{}?embed=1&sidebar=0&ctx={}'.format(
+        url_for('embed_page', form_id=form_id), context_token
+    )
 
 
 def _consume_integration_ticket(ticket):
@@ -494,15 +613,15 @@ def issue_frontend_integration_ticket():
     if not username or not password or len(username) > 64 or len(password) > 256:
         return _frontend_ticket_error('前端无感登录凭据无效。', 400,
                                       'invalid_frontend_integration_request', origin)
-    if not _login_allowed():
+    if not _login_allowed(username):
         return _frontend_ticket_error('登录尝试过于频繁，请稍后再试。', 429,
                                       'frontend_integration_rate_limited', origin)
     if not DBManager().authenticate_user(username, password):
-        _record_login_failure()
+        _record_login_failure(username)
         return _frontend_ticket_error('账号或密码无效，账号可能未启用。', 401,
                                       'invalid_frontend_integration_credentials', origin)
 
-    _clear_login_failures()
+    _clear_login_failures(username)
     ticket = _issue_integration_ticket(
         username, data.get('next'), cfg['ticket_ttl_seconds'],
         auth_source='frontend_password_exchange'
@@ -518,14 +637,13 @@ def issue_frontend_integration_ticket():
 @app.route('/api/integration/session', methods=['GET', 'OPTIONS'])
 def frontend_embed_session():
     """供 Embed SDK 判断当前浏览器是否已有有效 DBQuery Session。"""
-    _, origin, failure = _frontend_embed_config()
+    _, origin, failure = _frontend_embed_config(allow_same_origin_session_probe=True)
     if failure is not None:
         return failure
     if request.method == 'OPTIONS':
         return _frontend_embed_cors_response(('', 204), origin, 'GET, OPTIONS')
-    return _frontend_embed_cors_response(jsonify({
-        'authenticated': _session_is_authenticated()
-    }), origin, 'GET, OPTIONS')
+    response = jsonify({'authenticated': _session_is_authenticated()})
+    return _frontend_embed_cors_response(response, origin, 'GET, OPTIONS') if origin else response
 
 
 @app.route('/api/integration/frontend-login', methods=['POST', 'OPTIONS'])
@@ -546,15 +664,15 @@ def frontend_embed_login():
     password = str(data.get('password') or '')
     if not username or not password or len(username) > 64 or len(password) > 256:
         return _frontend_embed_error('账号或密码错误。', 401, 'AUTH_FAILED', origin)
-    if not _login_allowed():
+    if not _login_allowed(username):
         return _frontend_embed_error('登录尝试过于频繁，请稍后再试。', 429,
                                      'AUTH_FAILED', origin)
     if not DBManager().authenticate_user(username, password):
-        _record_login_failure()
+        _record_login_failure(username)
         # 不区分账号不存在、密码错误、禁用或删除，避免账号枚举。
         return _frontend_embed_error('账号或密码错误。', 401, 'AUTH_FAILED', origin)
 
-    _clear_login_failures()
+    _clear_login_failures(username)
     _establish_authenticated_session(
         username, 'frontend_embed_v1', cfg.get('frontend_embed_session_minutes', 60)
     )
@@ -590,9 +708,11 @@ def frontend_embed_url():
     external_params, param_error = _validate_external_embed_params(form, data.get('params'))
     if param_error:
         return _frontend_embed_error('嵌入参数无效。', 400, param_error, origin)
+    context_token = _issue_embed_context(form_id, external_params)
     return _frontend_embed_cors_response(jsonify({
         'success': True,
-        'embed_url': _build_embed_url(form_id, external_params),
+        'embed_url': _build_embed_url(form_id, context_token),
+        'expires_in': _EMBED_CONTEXT_TTL_SECONDS,
     }), origin)
 
 
@@ -664,21 +784,20 @@ def login():
             return render_template('login.html', error=u'登录页面已失效，请刷新后重试。',
                                    next_url=next_url, csrf_token=_csrf_token(),
                                    page_name='login'), 400
-        if not _login_allowed():
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '')
+        if not _login_allowed(username):
             return render_template('login.html', error=u'登录尝试过于频繁，请稍后再试。',
                                    next_url=next_url, csrf_token=_csrf_token(),
                                    page_name='login'), 429
-
-        username = request.form.get('username', '').strip()
-        password = request.form.get('password', '')
         if DBManager().authenticate_user(username, password):
             _establish_authenticated_session(username, 'password')
 
-            _clear_login_failures()
+            _clear_login_failures(username)
 
             return redirect(next_url or url_for('index'))
 
-        _record_login_failure()
+        _record_login_failure(username)
         error = u'账号、密码无效，账号可能未启用，或数据服务暂不可用。'
 
     return render_template('login.html', error=error, next_url=next_url,
@@ -735,10 +854,17 @@ def embed_page(form_id):
         status = 403 if form_error == 'FORM_NOT_WEB_ENABLED' else 404
         return error_response('当前表单不可访问。', status, form_error)
 
-    supplied_params = {
-        param.name: request.args.get(param.name)
-        for param in form.params if param.name in request.args
-    }
+    if any(param.name in request.args for param in form.params):
+        return error_response('嵌入业务参数必须通过短期上下文传递。', 400, 'EMBED_CONTEXT_REQUIRED')
+    context_token = request.args.get('ctx', '')
+    if context_token:
+        supplied_params, context_error = _read_embed_context(context_token, form_id)
+        if context_error:
+            return error_response('嵌入上下文无效或已失效。', 403, context_error)
+    else:
+        # iframe URLs must not place medical/business values in history, logs or Referer. A direct form view with no
+        # prefill remains valid, but all Embed V1 prefill must be issued by the protected context endpoint.
+        supplied_params = {}
     normalized_params, param_error = _validate_external_embed_params(form, supplied_params)
     if param_error:
         return error_response('嵌入参数无效。', 400, param_error)

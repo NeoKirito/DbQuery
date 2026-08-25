@@ -1,6 +1,6 @@
 # DBQuery 仅前端无密钥无感登录
 
-> **兼容模式（不建议新接入使用）。** 本文档描述历史 `frontend-ticket` → 隐藏 form → `/sso/consume` 流程，接口继续保留以避免破坏已有集成。新的 PEIS 前端应优先使用 README 中的 **DBQuery Frontend Embed V1**：它直接建立 DBQuery Session、提供 `DBQueryEmbed.mount()` 与 `DBQueryEmbed.logout()`，并使用公开 form ID 和 `external_allowed` 参数门控。
+> **兼容模式。** 本文档描述历史 `frontend-ticket` → 隐藏 form → `/sso/consume` 流程，接口继续保留以避免破坏已有集成。新生产接入优先使用 [HOST_INTEGRATION.md](HOST_INTEGRATION.md) 中的 **Backend Signed SSO**；只有 PEIS 后端暂时无法改造且浏览器在本次登录内存中持有凭据时，才考虑 README 中的 **Frontend Embed V1**。
 
 ## 适用范围
 
@@ -141,7 +141,7 @@ Content-Type: application/json
 |---|---|
 | 账号验证 | DBQuery 继续用 `qx_czyxx` 的 `czybm`、`pass`、`czyzt='启用'`、`deleted='0'` 进行参数化认证。 |
 | 来源白名单 | 浏览器 `Origin` 必须精确匹配 EXE 中配置的一个 Origin；接口不会输出 `Access-Control-Allow-Origin: *`。 |
-| 登录限流 | 与普通 DBQuery 登录共用每来源地址 5 次 / 5 分钟的失败限流。 |
+| 登录限流 | 与普通 DBQuery 登录共用每“规范化客户端地址 + 用户名”5 次 / 5 分钟的失败限流；未显式信任代理时不会采信 `X-Forwarded-For`。 |
 | ticket | 只保存在当前 DBQuery 服务进程内；默认 60 秒失效，且 `POST /sso/consume` 后即被删除，无法重用。 |
 | iframe | ticket 通过 POST 而不是 URL 传递，不进入地址栏、历史记录或常规访问日志。 |
 | 表单可见性 | 登录成功不改变表单权限；只有 `web_enabled = true` 的 `.qry` 可以在 Web 中打开。 |

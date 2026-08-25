@@ -49,13 +49,21 @@ Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。所�
 
 建议 iframe 容器由宿主系统提供稳定的内容区高度。DbQuery 嵌入模式会使用 iframe 的完整可用高度，并仅使结果区域产生必要的纵向滚动；宽表仍可在结果区域内横向滚动。
 
+### 身份集成优先级
+
+| 优先级 | 集成方式 | 适用边界 |
+|---|---|---|
+| 1 | **Backend Signed SSO** | 生产首选。宿主后端保存共享密钥并签发一次性票据；完整协议见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。 |
+| 2 | **Frontend Embed V1** | 仅在 PEIS 后端暂时无法改造、且当前浏览器登录流程短暂持有凭据时使用。它仍需精确 Origin、HTTPS 和 Cookie 边界。 |
+| 3 | **legacy frontend-ticket** | 仅为已有接入保留的兼容模式；说明见 [FRONTEND_INTEGRATION.md](FRONTEND_INTEGRATION.md)。 |
+
 嵌入页面与独立访问使用同一个登录页和服务端会话。嵌入页未登录时会显示登录界面；宿主系统不能仅凭 iframe 地址绕过认证。若宿主和 DbQuery 不属于同一站点且浏览器禁止第三方 Cookie，请由部署人员按浏览器安全策略评估，或后续接入企业 SSO，不应在 URL 中传递账号密码。
 
 对于已登录宿主系统的无感 iframe 集成，DBQuery 提供受 HMAC 签名保护的一次性短期票据流程：宿主**后端**验证当前用户后申请票据，浏览器通过 iframe `POST` 消费票据而不显示 DBQuery 登录页。完整配置、签名原文、接口和 .NET 示例见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。该流程只建立身份，**不会绕过**下面的 `web_enabled` 表单授权。
 
 ### DBQuery Frontend Embed V1
 
-当 PEIS 前端已经在本次登录流程中持有当前用户的账号和密码时，可使用正式的 `DBQueryEmbed` SDK。DBQuery 仍会使用 `qx_czyxx` 独立复核账号、密码、启用和未删除状态；认证成功后只建立 DBQuery 自己的 HttpOnly Session。后续 iframe、查询、动态候选与导出均只使用该 Session，SDK 不会保存密码。
+当 PEIS 前端已经在本次登录流程中持有当前用户的账号和密码时，可使用 `DBQueryEmbed` SDK。DBQuery 仍会使用 `qx_czyxx` 独立复核账号、密码、启用和未删除状态；认证成功后只建立 DBQuery 自己的 HttpOnly Session。SDK 返回的 iframe 地址只包含短期、会话绑定的 `ctx`，业务预填值不会长期置于 URL；后续 iframe、查询、动态候选与导出均只使用该 Session，SDK 不会保存密码。
 
 生产部署必须先通过 `config.ini` 的 `[integration]` 显式开启此模式。不要在源码、发布包或浏览器配置中保存任何真实账号、密码或生产域名。
 
@@ -71,7 +79,19 @@ frontend_embed_session_minutes = 60
 frame_ancestors = https://peis.example.com
 ```
 
-推荐将 DBQuery 通过同域反向代理挂载在 `/dbquery` 下。若代理会设置 `X-Forwarded-Prefix`，需在 DBQuery 服务进程环境中显式设置 `DBQUERY_TRUST_PROXY_PREFIX=true`；若 HTTPS 在反向代理终止，可设置 `DBQUERY_SESSION_COOKIE_SECURE=true`。跨站 iframe Cookie 还会受浏览器 SameSite/第三方 Cookie 策略约束，因此同域部署优先。
+推荐生产部署为 `https://peis.example.com/`（PEIS）与 `https://peis.example.com/dbquery/`（DBQuery）。该同源部署应在 DBQuery 服务进程设置：
+
+```text
+DBQUERY_SESSION_COOKIE_NAME=dbquery_session
+DBQUERY_SESSION_COOKIE_PATH=/dbquery
+DBQUERY_SESSION_COOKIE_SECURE=true
+DBQUERY_SESSION_COOKIE_SAMESITE=Lax
+DBQUERY_TRUST_PROXY_PREFIX=true
+```
+
+`dbquery_session` 与宿主常见的 `session` Cookie 隔离；`Path=/dbquery` 进一步限制其发送范围。只有在入口反向代理真实、受控地重写客户端地址时才设置 `DBQUERY_TRUST_PROXY_FOR=true`；它与前缀信任是独立开关。若跨站 iframe 必须使用 `SameSite=None`，必须同时设置 `DBQUERY_SESSION_COOKIE_SECURE=true`，否则现代浏览器不会可靠发送会话 Cookie。
+
+`POST /api/integration/embed-url` 会校验 `external_allowed`、类型和动态候选项后，返回只含 `ctx` 的短期、当前 DBQuery 会话绑定 iframe URL。不要手工拼接 `?tjh=...` 等业务参数；`/embed/<form>?ctx=...` 会拒绝任何裸业务参数，以避免其进入地址栏、历史、代理日志或 Referer。`options_sql` 继续只留在服务端。
 
 原生 JavaScript 的调用只需加载 SDK 并调用 `mount()`：
 
@@ -121,7 +141,7 @@ FROM qx_czyxx
 WHERE czybm = ? AND [pass] = ? AND czyzt = N'启用' AND deleted = '0'
 ```
 
-账号和密码不会写入 URL、前端脚本、日志或 Web 会话。Web 会话默认为 8 小时，服务重启后要求重新登录；连续失败登录会按客户端地址短时限制，以降低猜测密码风险。
+账号和密码不会写入 URL、前端脚本、日志或 Web 会话。Web 会话默认为 8 小时，服务重启后要求重新登录；连续失败登录会按**客户端地址与规范化用户名**组合短时限制，以降低代理后单一地址误伤其他用户的风险。
 
 每个 `.qry` 的 `[meta]` 可配置 `web_enabled`：
 

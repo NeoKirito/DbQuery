@@ -47,11 +47,27 @@ class FrontendEmbedV1Tests(unittest.TestCase):
     origin = 'https://peis.example.com'
 
     def setUp(self):
-        web_server.app.config.update(TESTING=True, SECRET_KEY='frontend-embed-v1-test-secret')
+        web_server.app.config.update(
+            TESTING=True,
+            SECRET_KEY='frontend-embed-v1-test-secret',
+            SESSION_COOKIE_NAME='dbquery_session',
+            SESSION_COOKIE_PATH='/',
+            SESSION_COOKIE_HTTPONLY=True,
+            SESSION_COOKIE_SAMESITE='Lax',
+            SESSION_COOKIE_SECURE=False,
+        )
         self.client = web_server.app.test_client()
         with web_server._LOGIN_LOCK:
             web_server._LOGIN_FAILURES.clear()
+        with web_server._INTEGRATION_LOCK:
+            web_server._EMBED_CONTEXTS.clear()
         self.form = self.make_form()
+
+    def tearDown(self):
+        with web_server._LOGIN_LOCK:
+            web_server._LOGIN_FAILURES.clear()
+        with web_server._INTEGRATION_LOCK:
+            web_server._EMBED_CONTEXTS.clear()
 
     @staticmethod
     def make_form(public_id='person-detail', web_enabled=True):
@@ -79,11 +95,15 @@ class FrontendEmbedV1Tests(unittest.TestCase):
             '测试': list(forms or [self.form])
         })
 
-    def request_login(self, manager, username='tester', password='correct', origin=None):
+    def request_login(self, manager, username='tester', password='correct', origin=None, extra_headers=None):
+        headers = dict(extra_headers or {})
+        if origin is not None:
+            headers['Origin'] = origin
+        elif 'Origin' not in headers:
+            headers['Origin'] = self.origin
         with self.manager_patch(manager):
-            return self.client.post('/api/integration/frontend-login', headers={
-                'Origin': origin or self.origin
-            }, json={'username': username, 'password': password})
+            return self.client.post('/api/integration/frontend-login', headers=headers,
+                                    json={'username': username, 'password': password})
 
     def establish_session(self, username='tester'):
         with self.client.session_transaction() as state:
@@ -157,6 +177,175 @@ class FrontendEmbedV1Tests(unittest.TestCase):
         self.assertEqual(response.get_json(), {'authenticated': True})
         self.assertFalse(manager.authenticate_calls)
 
+    def test_dbquery_cookie_name_isolated_from_host_session_and_http_only(self):
+        manager = EmbedManager()
+        self.client.set_cookie('session', 'PEIS_SESSION_VALUE', domain='localhost')
+        response = self.request_login(manager)
+
+        set_cookie = response.headers.get('Set-Cookie', '')
+        self.assertIn('dbquery_session=', set_cookie)
+        self.assertIn('HttpOnly', set_cookie)
+        self.assertNotIn('session=PEIS_SESSION_VALUE', set_cookie)
+        self.assertEqual(self.client.get_cookie('session', domain='localhost').value, 'PEIS_SESSION_VALUE')
+        self.assertIsNotNone(self.client.get_cookie('dbquery_session', domain='localhost'))
+
+    def test_embed_logout_clears_only_dbquery_cookie(self):
+        manager = EmbedManager()
+        self.client.set_cookie('session', 'PEIS_SESSION_VALUE', domain='localhost')
+        self.request_login(manager)
+        with self.manager_patch(manager):
+            logout = self.client.post('/api/integration/logout', headers={'Origin': self.origin})
+
+        self.assertEqual(logout.status_code, 200)
+        self.assertIn('dbquery_session=', logout.headers.get('Set-Cookie', ''))
+        self.assertEqual(self.client.get_cookie('session', domain='localhost').value, 'PEIS_SESSION_VALUE')
+
+    def test_cookie_secure_and_samesite_configuration_are_emitted(self):
+        web_server.app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_SAMESITE='None')
+        response = self.request_login(EmbedManager())
+        set_cookie = response.headers.get('Set-Cookie', '')
+        self.assertIn('Secure', set_cookie)
+        self.assertIn('SameSite=None', set_cookie)
+
+    def test_cookie_environment_configuration_supports_subpath_scope(self):
+        with patch.dict(os.environ, {
+            'DBQUERY_SESSION_COOKIE_NAME': 'dbquery_session_custom',
+            'DBQUERY_SESSION_COOKIE_PATH': '/dbquery',
+            'DBQUERY_SESSION_COOKIE_SECURE': 'true',
+            'DBQUERY_SESSION_COOKIE_SAMESITE': 'Lax',
+        }, clear=False):
+            web_server._configure_session_cookie(web_server.app)
+        self.assertEqual(web_server.app.config['SESSION_COOKIE_NAME'], 'dbquery_session_custom')
+        self.assertEqual(web_server.app.config['SESSION_COOKIE_PATH'], '/dbquery')
+        self.assertTrue(web_server.app.config['SESSION_COOKIE_SECURE'])
+        self.assertEqual(web_server.app.config['SESSION_COOKIE_SAMESITE'], 'Lax')
+
+    def test_same_origin_session_probe_without_origin_is_allowed(self):
+        manager = EmbedManager(origins=['https://peis.example.com'])
+        with self.manager_patch(manager):
+            response = self.client.get('/api/integration/session', base_url='https://peis.example.com',
+                                       headers={'Sec-Fetch-Site': 'same-origin'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {'authenticated': False})
+        self.assertIsNone(response.headers.get('Access-Control-Allow-Origin'))
+
+    def test_legacy_browser_same_origin_probe_without_fetch_metadata_is_allowed_only_for_allowed_host(self):
+        manager = EmbedManager(origins=['https://peis.example.com'])
+        with self.manager_patch(manager):
+            allowed = self.client.get('/api/integration/session', base_url='https://peis.example.com')
+            denied = self.client.get('/api/integration/session', base_url='https://dbquery.example.com')
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(denied.status_code, 403)
+
+    def test_cross_site_session_probe_without_origin_is_rejected(self):
+        manager = EmbedManager(origins=['https://peis.example.com'])
+        with self.manager_patch(manager):
+            response = self.client.get('/api/integration/session', base_url='https://peis.example.com',
+                                       headers={'Sec-Fetch-Site': 'cross-site'})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()['error_type'], 'ORIGIN_DENIED')
+
+    def test_evil_origin_session_probe_is_rejected(self):
+        manager = EmbedManager()
+        with self.manager_patch(manager):
+            response = self.client.get('/api/integration/session', headers={'Origin': 'https://evil.example.com'})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()['error_type'], 'ORIGIN_DENIED')
+
+    def test_missing_or_evil_origin_post_is_rejected_before_authentication(self):
+        manager = EmbedManager()
+        missing = self.request_login(manager, origin='')
+        evil = self.request_login(manager, origin='https://evil.example.com')
+        self.assertEqual(missing.status_code, 403)
+        self.assertEqual(evil.status_code, 403)
+        self.assertEqual(missing.get_json()['error_type'], 'ORIGIN_DENIED')
+        self.assertEqual(evil.get_json()['error_type'], 'ORIGIN_DENIED')
+        self.assertFalse(manager.authenticate_calls)
+
+    def test_rate_limit_isolated_by_username_and_ignores_untrusted_forwarded_for(self):
+        manager = EmbedManager(authenticated=False)
+        spoof_headers = {'X-Forwarded-For': '198.51.100.77'}
+        for _ in range(web_server._LOGIN_LIMIT):
+            self.assertEqual(self.request_login(manager, username='userA', password='bad',
+                                                extra_headers=spoof_headers).status_code, 401)
+        blocked = self.request_login(manager, username='userA', password='bad', extra_headers=spoof_headers)
+        other_user = self.request_login(manager, username='userB', password='bad', extra_headers=spoof_headers)
+
+        self.assertEqual(blocked.status_code, 429)
+        self.assertEqual(other_user.status_code, 401)
+        self.assertTrue(any(key.endswith('|usera') for key in web_server._LOGIN_FAILURES))
+        self.assertFalse(any(key.startswith('198.51.100.77|') for key in web_server._LOGIN_FAILURES))
+
+    def test_proxy_forwarded_for_is_only_enabled_by_dedicated_opt_in(self):
+        with patch.dict(os.environ, {'DBQUERY_TRUST_PROXY_FOR': 'false',
+                                     'DBQUERY_TRUST_PROXY_PREFIX': 'true'}, clear=False):
+            self.assertEqual(web_server._proxy_fix_options(), {'x_prefix': 1})
+        with patch.dict(os.environ, {'DBQUERY_TRUST_PROXY_FOR': 'true',
+                                     'DBQUERY_TRUST_PROXY_PREFIX': 'false'}, clear=False):
+            self.assertEqual(web_server._proxy_fix_options(), {'x_for': 1})
+
+    def test_embed_url_uses_session_bound_context_without_business_value_in_url(self):
+        manager = EmbedManager()
+        self.establish_session()
+        with self.manager_patch(manager), self.forms_patch():
+            create = self.client.post('/api/integration/embed-url', headers={'Origin': self.origin}, json={
+                'form': 'person-detail',
+                'params': {'tjh': '202608250001', 'internal': 'override', 'source': 'override'},
+            })
+            embed_url = create.get_json()['embed_url']
+            rendered = self.client.get(embed_url)
+
+        self.assertEqual(create.status_code, 200)
+        self.assertIn('ctx=', embed_url)
+        self.assertNotIn('tjh=', embed_url)
+        self.assertNotIn('202608250001', embed_url)
+        self.assertEqual(rendered.status_code, 200)
+        html = rendered.get_data(as_text=True)
+        self.assertIn('value="202608250001"', html)
+        self.assertIn('server-only', html)
+        self.assertNotIn('override', html)
+
+    def test_ctx_url_rejects_appended_business_and_hidden_values(self):
+        manager = EmbedManager()
+        self.establish_session('tester')
+        with self.manager_patch(manager), self.forms_patch():
+            create = self.client.post('/api/integration/embed-url', headers={'Origin': self.origin}, json={
+                'form': 'person-detail', 'params': {'tjh': 'original'}
+            })
+            response = self.client.get(create.get_json()['embed_url'] + '&tjh=override&source=override')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error_type'], 'EMBED_CONTEXT_REQUIRED')
+
+    def test_expired_embed_context_is_rejected(self):
+        manager = EmbedManager()
+        self.establish_session('tester')
+        with self.manager_patch(manager), self.forms_patch():
+            create = self.client.post('/api/integration/embed-url', headers={'Origin': self.origin}, json={
+                'form': 'person-detail', 'params': {'tjh': 'original'}
+            })
+            context_token = create.get_json()['embed_url'].split('ctx=', 1)[1]
+            with web_server._INTEGRATION_LOCK:
+                web_server._EMBED_CONTEXTS[context_token]['expires_at'] = 0
+            response = self.client.get(create.get_json()['embed_url'])
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()['error_type'], 'INVALID_EMBED_CONTEXT')
+
+    def test_embed_context_cannot_be_reused_by_another_session(self):
+        manager = EmbedManager()
+        self.establish_session('tester')
+        with self.manager_patch(manager), self.forms_patch():
+            create = self.client.post('/api/integration/embed-url', headers={'Origin': self.origin}, json={
+                'form': 'person-detail', 'params': {'tjh': '202608250001'}
+            })
+            other_client = web_server.app.test_client()
+            with other_client.session_transaction() as state:
+                state['auth_user'] = 'tester'
+                state['auth_source'] = 'frontend_embed_v1'
+            response = other_client.get(create.get_json()['embed_url'])
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()['error_type'], 'INVALID_EMBED_CONTEXT')
+
     def test_login_rate_limit_applies_to_embed_endpoint(self):
         manager = EmbedManager(authenticated=False)
         for _ in range(web_server._LOGIN_LIMIT):
@@ -176,21 +365,20 @@ class FrontendEmbedV1Tests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         embed_url = response.get_json()['embed_url']
         self.assertIn('embed=1', embed_url)
-        self.assertIn('tjh=202608250001', embed_url)
+        self.assertIn('ctx=', embed_url)
+        self.assertNotIn('tjh=', embed_url)
+        self.assertNotIn('202608250001', embed_url)
         self.assertNotIn('internal=', embed_url)
         self.assertNotIn('source=', embed_url)
         self.assertNotIn('password', embed_url.lower())
 
-    def test_embed_route_revalidates_params_and_never_allows_hidden_or_internal_override(self):
+    def test_embed_route_rejects_bare_url_parameters_without_context(self):
         manager = EmbedManager()
         self.establish_session()
         with self.manager_patch(manager), self.forms_patch():
             response = self.client.get('/embed/person-detail?embed=1&sidebar=0&tjh=ABC&internal=evil&source=evil')
-        html = response.get_data(as_text=True)
-        self.assertEqual(response.status_code, 200)
-        self.assertIn('value="ABC"', html)
-        self.assertIn('server-only', html)
-        self.assertNotIn('evil', html)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()['error_type'], 'EMBED_CONTEXT_REQUIRED')
 
     def test_invalid_type_and_path_like_form_id_are_rejected(self):
         manager = EmbedManager()
