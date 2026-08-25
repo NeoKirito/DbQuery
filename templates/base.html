@@ -4,9 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}综合查询{% endblock %}</title>
-    <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/vendor/dataTables.bootstrap5.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='vendor/dataTables.bootstrap5.min.css') }}" rel="stylesheet">
+    <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
     {% block head %}{% endblock %}
 </head>
 <body class="{% if embed_mode %}embed-mode{% else %}standalone-mode{% endif %}{% if sidebar_hidden %} sidebar-hidden-mode{% endif %}"
@@ -18,10 +18,10 @@
     </main>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
     {% if page_name|default('app') != 'login' %}
-    <script src="/static/vendor/jquery.min.js"></script>
-    <script src="/static/vendor/bootstrap.bundle.min.js"></script>
-    <script src="/static/vendor/jquery.dataTables.min.js"></script>
-    <script src="/static/js/app.js"></script>
+    <script src="{{ url_for('static', filename='vendor/jquery.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='vendor/jquery.dataTables.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     {% endif %}
     {% block scripts %}{% endblock %}
 </body>

@@ -3,9 +3,10 @@ title = Web 快速上手（安全示例）
 group = 示例
 description = 登录后可直接运行；不读取任何业务表，用于验证 Web 权限、查询和导出流程。
 web_enabled = true
+id = web-quickstart
 
 [params]
-keyword = 演示关键词 | text | 欢迎使用 | placeholder=可输入任意演示文字
+keyword = 演示关键词 | text | 欢迎使用 | placeholder=可输入任意演示文字 | external_allowed=true
 
 [sql]
 SELECT

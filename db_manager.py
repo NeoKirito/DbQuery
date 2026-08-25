@@ -46,6 +46,12 @@ DEFAULT_INTEGRATION_CONFIG = {
     # 必须显式开启并填写精确的前端 Origin，不能使用通配符。
     'frontend_enabled': 'no',
     'frontend_allowed_origins': '',
+    # Frontend Embed V1：默认关闭，必须配置精确 Origin 白名单。
+    'frontend_embed_enabled': 'no',
+    'frontend_embed_allowed_origins': '',
+    'frontend_embed_session_minutes': '60',
+    # 留空时 Web 响应使用 frame-ancestors 'self'；不接受通配符。
+    'frame_ancestors': '',
 }
 
 _DRIVER_PRIORITY = [
@@ -74,10 +80,16 @@ class DBManager:
         self.load_config()
 
     @staticmethod
+    def _flag(value):
+        """统一处理 bool 或 config.ini 字符串，避免 'no' 被 Python 当作真值。"""
+        return str(value or '').strip().lower() in ('yes', '1', 'true', 'on')
+
+    @staticmethod
     def _positive_int(value, default, maximum=None):
         """读取正整数配置，异常、空值或越界时回退默认值。"""
         try:
             parsed = int(str(value).strip())
+
         except (TypeError, ValueError):
             return default
         if parsed <= 0:
@@ -153,6 +165,15 @@ class DBManager:
             'frontend_allowed_origins': self._parse_allowed_origins(
                 section.get('frontend_allowed_origins', '')
             ),
+            'frontend_embed_enabled': str(section.get('frontend_embed_enabled', 'no')).lower() in
+                                      ('yes', '1', 'true', 'on'),
+            'frontend_embed_allowed_origins': self._parse_allowed_origins(
+                section.get('frontend_embed_allowed_origins', '')
+            ),
+            'frontend_embed_session_minutes': self._positive_int(
+                section.get('frontend_embed_session_minutes'), 60, maximum=1440
+            ),
+            'frame_ancestors': self._parse_allowed_origins(section.get('frame_ancestors', '')),
         }
 
     @staticmethod
@@ -161,11 +182,27 @@ class DBManager:
         return secrets.token_urlsafe(48)
 
     def set_integration_config(self, cfg_dict):
+        """保存宿主集成配置，同时保留未由旧桌面 UI 编辑的 Embed V1 字段。"""
         section = DEFAULT_INTEGRATION_CONFIG.copy()
-        raw_origins = cfg_dict.get('frontend_allowed_origins', '')
+        if self.config.has_section('integration'):
+            section.update(dict(self.config['integration']))
+
+        raw_origins = cfg_dict.get('frontend_allowed_origins', section['frontend_allowed_origins'])
         if isinstance(raw_origins, (list, tuple)):
             raw_origins = ','.join(raw_origins)
         frontend_origins = self._parse_allowed_origins(raw_origins)
+
+        embed_origins_raw = cfg_dict.get(
+            'frontend_embed_allowed_origins', section['frontend_embed_allowed_origins']
+        )
+        if isinstance(embed_origins_raw, (list, tuple)):
+            embed_origins_raw = ','.join(embed_origins_raw)
+        embed_origins = self._parse_allowed_origins(embed_origins_raw)
+
+        frame_ancestors_raw = cfg_dict.get('frame_ancestors', section['frame_ancestors'])
+        if isinstance(frame_ancestors_raw, (list, tuple)):
+            frame_ancestors_raw = ','.join(frame_ancestors_raw)
+        frame_ancestors = self._parse_allowed_origins(frame_ancestors_raw)
 
         section.update({
             'enabled': 'yes' if cfg_dict.get('enabled') else 'no',
@@ -180,6 +217,15 @@ class DBManager:
             )),
             'frontend_enabled': 'yes' if cfg_dict.get('frontend_enabled') else 'no',
             'frontend_allowed_origins': ', '.join(frontend_origins),
+            'frontend_embed_enabled': 'yes' if self._flag(cfg_dict.get(
+                'frontend_embed_enabled', section['frontend_embed_enabled']
+            )) else 'no',
+            'frontend_embed_allowed_origins': ', '.join(embed_origins),
+            'frontend_embed_session_minutes': str(self._positive_int(
+                cfg_dict.get('frontend_embed_session_minutes', section['frontend_embed_session_minutes']),
+                60, maximum=1440
+            )),
+            'frame_ancestors': ', '.join(frame_ancestors),
         })
 
         self.config['integration'] = section

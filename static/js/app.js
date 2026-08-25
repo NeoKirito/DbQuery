@@ -2,9 +2,14 @@
 var lastQueryResult = null;
 var dataTable = null;
 
+function apiPath(path) {
+    var base = (window.DBQUERY && window.DBQUERY.apiBase) || '';
+    return String(base).replace(/\/$/, '') + path;
+}
+
 function redirectToLogin() {
     var target = window.location.pathname + window.location.search;
-    window.location.replace('/login?next=' + encodeURIComponent(target));
+    window.location.replace(apiPath('/login') + '?next=' + encodeURIComponent(target));
 }
 
 $(document).ajaxError(function (event, xhr) {
@@ -196,13 +201,13 @@ function loadDynamicSelectOptions() {
     var config = window.DBQUERY || {};
     var params = config.formParams || [];
     params.forEach(function (param) {
-        if (!param || param.ptype !== 'select' || !param.options_sql) return;
+        if (!param || param.ptype !== 'select' || !param.dynamic_options) return;
         var $root = $('.searchable-select').filter(function () {
             return $(this).data('name') === param.name;
         }).first();
         if (!$root.length) return;
         $.ajax({
-            url: '/api/options',
+            url: apiPath('/api/options'),
             method: 'POST',
             contentType: 'application/json',
             data: JSON.stringify({file_path: config.filePath, param_name: param.name}),
@@ -227,7 +232,7 @@ function loadFormTree() {
         return;
     }
 
-    $.get('/api/forms', function (data) {
+    $.get(apiPath('/api/forms'), function (data) {
         var html = buildFormTree(data);
         $trees.html(html);
         highlightCurrentForm();
@@ -248,7 +253,7 @@ function buildFormTree(data) {
         html += '<div class="nav-group-items">';
         for (var index = 0; index < forms.length; index++) {
             var form = forms[index];
-            var url = preserveEmbedParams('/query/' + encodeFilePath(form.file_path));
+            var url = preserveEmbedParams(apiPath('/query/' + encodeFilePath(form.file_path)));
             html += '<a href="' + esc(url) + '" class="nav-item-link' + (form.description ? ' has-desc' : '') + '" data-title="' + esc(form.title.toLowerCase()) + '">';
             html += svgIcon('document', 'nav-item-icon') + '<span class="nav-item-content"><span class="nav-item-title">' + esc(form.title) + '</span>';
             if (form.description) html += '<span class="nav-item-desc">' + esc(form.description) + '</span>';
@@ -364,7 +369,7 @@ function testConnection() {
     if (!$dot.length) return;
     $dot.attr('class', 'conn-dot conn-testing');
     $text.text('正在检测数据服务');
-    $.get('/api/test-connection', function (data) {
+    $.get(apiPath('/api/test-connection'), function (data) {
         if (data.success) {
             $dot.attr('class', 'conn-dot conn-ok');
             $text.text('数据服务连接正常');
@@ -460,7 +465,7 @@ function executeQuery() {
     $('#status-text').text('正在查询，请稍候…');
 
     $.ajax({
-        url: '/api/query',
+        url: apiPath('/api/query'),
         method: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({file_path: filePath, params: collectParams()}),
@@ -578,7 +583,7 @@ function exportExcel() {
     $('#status-text').text('正在生成导出文件…');
 
     $.ajax({
-        url: '/api/export',
+        url: apiPath('/api/export'),
         method: 'POST',
         contentType: 'application/json',
         data: JSON.stringify({

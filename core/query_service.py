@@ -230,7 +230,10 @@ def serialize_form(form, base_dir=None):
         'group':       form.group,
         'query_type':  form.query_type,
         'web_enabled': bool(getattr(form, 'web_enabled', False)),
+        # public_id 仅是表单公开标识，不是文件系统路径。
+        'id':          getattr(form, 'public_id', ''),
         'file_path':   fp,
+
         'params': [
             {
                 'name':    p.name,
@@ -244,9 +247,11 @@ def serialize_form(form, base_dir=None):
                 'placeholder': p.placeholder,
                 'required': p.required,
                 'width': p.width,
-                'options_sql': p.options_sql,
+                # 浏览器仅知道是否需要请求服务端加载动态候选；SQL 永不下发。
+                'dynamic_options': bool(p.options_sql),
                 'searchable': p.searchable or p.ptype == 'select',
                 'allow_custom': p.allow_custom,
+
             }
             for p in form.params
         ],

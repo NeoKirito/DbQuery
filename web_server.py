@@ -9,15 +9,18 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import secrets
+
 import sys
 import tempfile
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import unquote, urlencode
 
 from flask import (Flask, jsonify, make_response, redirect, render_template, request,
                    send_file, session, url_for)
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from flask.json.provider import DefaultJSONProvider
 
@@ -34,7 +37,7 @@ from form_parser import FormParser
 from core.query_service import build_final_sql, export_to_excel, load_all_forms, serialize_form
 from core.param_service import (
     OptionsLoadError, ParameterError, RequiredParameterError, load_options,
-    normalize_params, static_options
+    normalize_params, normalize_value, static_options
 )
 
 logging.basicConfig(
@@ -57,11 +60,26 @@ class DBQueryJSONProvider(DefaultJSONProvider):
         return super().default(obj, **kwargs)
 
 
+def _env_flag(name, default=False):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _session_same_site():
+    value = os.environ.get('DBQUERY_SESSION_COOKIE_SAMESITE', 'Lax').strip().title()
+    return value if value in ('Lax', 'Strict', 'None') else 'Lax'
+
+
 app = Flask(
     __name__,
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
+# 只有部署人员显式信任反向代理前缀时才处理 X-Forwarded-Prefix，避免直连请求伪造前缀。
+if _env_flag('DBQUERY_TRUST_PROXY_PREFIX', False):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
 app.json_provider_class = DBQueryJSONProvider
 app.json = DBQueryJSONProvider(app)
 # 未配置显式环境变量时，每次服务启动生成新的高熵密钥；服务重启后要求重新登录。
@@ -69,9 +87,13 @@ app.json = DBQueryJSONProvider(app)
 app.config.update(
     SECRET_KEY=os.environ.get('DBQUERY_SESSION_SECRET') or secrets.token_urlsafe(32),
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SAMESITE=_session_same_site(),
+    # HTTPS 反向代理可通过 DBQUERY_SESSION_COOKIE_SECURE=true 启用 Secure 属性。
+    SESSION_COOKIE_SECURE=_env_flag('DBQUERY_SESSION_COOKIE_SECURE', False),
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=8),
 )
+
+FORM_ID_PATTERN = re.compile(r'^[a-z0-9][a-z0-9_-]{0,63}$')
 
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_FAILURES = {}
@@ -223,6 +245,113 @@ def _frontend_ticket_error(message, status, error_type, origin):
     return _frontend_cors_response(_integration_error(message, status, error_type), origin)
 
 
+def _frontend_embed_config():
+    """验证 Frontend Embed V1 是否显式启用及浏览器来源是否获准。"""
+    cfg = DBManager().get_integration_config()
+    origin = request.headers.get('Origin', '').strip().lower().rstrip('/')
+    if not cfg.get('frontend_embed_enabled') or not cfg.get('frontend_embed_allowed_origins'):
+        return None, None, _integration_error(
+            'Frontend Embed 尚未启用。', 403, 'SESSION_FAILED'
+        )
+    if not origin or origin not in cfg['frontend_embed_allowed_origins']:
+        return None, None, _integration_error(
+            '宿主前端来源未获授权。', 403, 'ORIGIN_DENIED'
+        )
+    return cfg, origin, None
+
+
+def _frontend_embed_cors_response(response, origin, methods='POST, OPTIONS'):
+    """仅为精确匹配的 Embed Origin 开放携带 DBQuery 会话的 CORS 请求。"""
+    response = make_response(response)
+    response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = methods
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Access-Control-Max-Age'] = '300'
+    response.headers['Vary'] = 'Origin'
+    return response
+
+
+def _frontend_embed_error(message, status, error_type, origin=None, methods='POST, OPTIONS'):
+    response = _integration_error(message, status, error_type)
+    return _frontend_embed_cors_response(response, origin, methods) if origin else response
+
+
+def _establish_authenticated_session(username, auth_source, lifetime_minutes=None):
+    """建立 DBQuery 自身的 HttpOnly cookie 会话，不保存任何密码。"""
+    session.clear()
+    session['auth_user'] = username
+    session['auth_source'] = auth_source
+    session['csrf_token'] = secrets.token_urlsafe(24)
+    if lifetime_minutes is not None:
+        session['auth_expires_at'] = int(time.time()) + int(lifetime_minutes) * 60
+    session.permanent = True
+
+
+def _session_is_authenticated():
+    if not session.get('auth_user'):
+        return False
+    expires_at = session.get('auth_expires_at')
+    if expires_at is not None:
+        try:
+            expired = int(expires_at) <= int(time.time())
+        except (TypeError, ValueError):
+            expired = True
+        if expired:
+            session.clear()
+            return False
+    return True
+
+
+def _get_web_form_by_id(form_id):
+    """通过唯一公开 ID 查找表单，绝不将浏览器输入解释为文件路径。"""
+    normalized_id = str(form_id or '').strip().lower()
+    if not FORM_ID_PATTERN.match(normalized_id):
+        return None, 'FORM_NOT_FOUND'
+
+    matches = []
+    for forms in FormParser.load_forms_from_dir(FORMS_DIR).values():
+        for form in forms:
+            configured_id = str(getattr(form, 'public_id', '') or '').strip().lower()
+            if configured_id == normalized_id:
+                matches.append(form)
+    if len(matches) != 1:
+        return None, 'FORM_NOT_FOUND'
+    if not bool(getattr(matches[0], 'web_enabled', False)):
+        return None, 'FORM_NOT_WEB_ENABLED'
+    return matches[0], None
+
+
+def _validate_external_embed_params(form, supplied_params):
+    """仅允许显式 external_allowed 的非 hidden 参数进入 iframe 初始 URL。"""
+    if supplied_params is None:
+        return {}, None
+    if not isinstance(supplied_params, dict):
+        return None, 'INVALID_PARAM'
+
+    options_by_name, _ = form_options(form, DBManager())
+    normalized = {}
+    for param in form.params:
+        if param.name not in supplied_params:
+            continue
+        # 未声明或 hidden 的字段不覆盖 .qry 默认值；未知字段同样被忽略。
+        if param.ptype == 'hidden' or not bool(getattr(param, 'external_allowed', False)):
+            continue
+        try:
+            options = options_by_name.get(param.name)
+            normalized[param.name] = normalize_value(param, supplied_params[param.name], options=options)
+        except ParameterError:
+            return None, 'INVALID_PARAM'
+    return normalized, None
+
+
+def _build_embed_url(form_id, external_params):
+    query = [('embed', '1'), ('sidebar', '0')]
+    for name in sorted(external_params):
+        query.append((name, external_params[name]))
+    return '{}?{}'.format(url_for('embed_page', form_id=form_id), urlencode(query))
+
+
 def _consume_integration_ticket(ticket):
     with _INTEGRATION_LOCK:
         _purge_integration_state()
@@ -241,9 +370,10 @@ def login_required(view):
     """对页面与 API 使用同一会话强制认证。"""
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
-        if not session.get('auth_user'):
+        if not _session_is_authenticated():
             return _unauthenticated_response()
         return view(*args, **kwargs)
+
     return wrapped
 
 
@@ -255,6 +385,15 @@ def apply_security_headers(response):
         response.headers['Pragma'] = 'no-cache'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'same-origin'
+    # 以 CSP 为准控制 iframe 祖先；移除可能与 CSP 冲突的旧 X-Frame-Options。
+    try:
+        frame_ancestors = DBManager().get_integration_config().get('frame_ancestors', [])
+    except Exception:
+        frame_ancestors = []
+    response.headers.pop('X-Frame-Options', None)
+    response.headers['Content-Security-Policy'] = 'frame-ancestors {}'.format(
+        ' '.join(["'self'"] + list(frame_ancestors or []))
+    )
     return response
 
 
@@ -376,6 +515,99 @@ def issue_frontend_integration_ticket():
     }), origin)
 
 
+@app.route('/api/integration/session', methods=['GET', 'OPTIONS'])
+def frontend_embed_session():
+    """供 Embed SDK 判断当前浏览器是否已有有效 DBQuery Session。"""
+    _, origin, failure = _frontend_embed_config()
+    if failure is not None:
+        return failure
+    if request.method == 'OPTIONS':
+        return _frontend_embed_cors_response(('', 204), origin, 'GET, OPTIONS')
+    return _frontend_embed_cors_response(jsonify({
+        'authenticated': _session_is_authenticated()
+    }), origin, 'GET, OPTIONS')
+
+
+@app.route('/api/integration/frontend-login', methods=['POST', 'OPTIONS'])
+def frontend_embed_login():
+    """以本次 POST 的账号密码建立 DBQuery 自己的 Embed Session。"""
+    cfg, origin, failure = _frontend_embed_config()
+    if failure is not None:
+        return failure
+    if request.method == 'OPTIONS':
+        return _frontend_embed_cors_response(('', 204), origin)
+    if request.content_length is not None and request.content_length > _INTEGRATION_MAX_BODY_LENGTH:
+        return _frontend_embed_error('账号或密码错误。', 400, 'AUTH_FAILED', origin)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _frontend_embed_error('账号或密码错误。', 400, 'AUTH_FAILED', origin)
+    username = str(data.get('username') or '').strip()
+    password = str(data.get('password') or '')
+    if not username or not password or len(username) > 64 or len(password) > 256:
+        return _frontend_embed_error('账号或密码错误。', 401, 'AUTH_FAILED', origin)
+    if not _login_allowed():
+        return _frontend_embed_error('登录尝试过于频繁，请稍后再试。', 429,
+                                     'AUTH_FAILED', origin)
+    if not DBManager().authenticate_user(username, password):
+        _record_login_failure()
+        # 不区分账号不存在、密码错误、禁用或删除，避免账号枚举。
+        return _frontend_embed_error('账号或密码错误。', 401, 'AUTH_FAILED', origin)
+
+    _clear_login_failures()
+    _establish_authenticated_session(
+        username, 'frontend_embed_v1', cfg.get('frontend_embed_session_minutes', 60)
+    )
+    return _frontend_embed_cors_response(jsonify({
+        'success': True,
+        'authenticated': True,
+        'user': {'username': username, 'display_name': username},
+    }), origin)
+
+
+@app.route('/api/integration/embed-url', methods=['POST', 'OPTIONS'])
+def frontend_embed_url():
+    """验证公开 form ID 与受控参数后，返回不含凭据的 iframe 地址。"""
+    _, origin, failure = _frontend_embed_config()
+    if failure is not None:
+        return failure
+    if request.method == 'OPTIONS':
+        return _frontend_embed_cors_response(('', 204), origin)
+    if not _session_is_authenticated():
+        return _frontend_embed_error('DBQuery 会话无效，请重新登录。', 401,
+                                     'SESSION_FAILED', origin)
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _frontend_embed_error('嵌入请求格式无效。', 400, 'FORM_NOT_FOUND', origin)
+    form_id = str(data.get('form') or '').strip().lower()
+    form, form_error = _get_web_form_by_id(form_id)
+    if form is None:
+        message = '当前表单不可访问。'
+        status = 403 if form_error == 'FORM_NOT_WEB_ENABLED' else 404
+        return _frontend_embed_error(message, status, form_error, origin)
+
+    external_params, param_error = _validate_external_embed_params(form, data.get('params'))
+    if param_error:
+        return _frontend_embed_error('嵌入参数无效。', 400, param_error, origin)
+    return _frontend_embed_cors_response(jsonify({
+        'success': True,
+        'embed_url': _build_embed_url(form_id, external_params),
+    }), origin)
+
+
+@app.route('/api/integration/logout', methods=['POST', 'OPTIONS'])
+def frontend_embed_logout():
+    """只清除 DBQuery Session，不触碰宿主系统的认证状态或凭据。"""
+    _, origin, failure = _frontend_embed_config()
+    if failure is not None:
+        return failure
+    if request.method == 'OPTIONS':
+        return _frontend_embed_cors_response(('', 204), origin)
+    session.clear()
+    return _frontend_embed_cors_response(jsonify({'success': True, 'authenticated': False}), origin)
+
+
 @app.route('/api/integration/sso-ticket', methods=['POST'])
 def issue_integration_ticket():
 
@@ -411,12 +643,10 @@ def consume_integration_ticket():
     if not state:
         return '宿主登录票据已失效，请返回宿主程序重新进入。', 401
 
-    session.clear()
-    session['auth_user'] = state['username']
-    session['auth_source'] = state.get('auth_source', 'host_integration')
+    _establish_authenticated_session(
+        state['username'], state.get('auth_source', 'host_integration')
+    )
 
-    session['csrf_token'] = secrets.token_urlsafe(24)
-    session.permanent = True
     logger.info('Consumed a one-time host integration ticket')
     return redirect(state['next_url'])
 
@@ -424,7 +654,7 @@ def consume_integration_ticket():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     """Web 与嵌入页共用的账号密码登录入口。"""
-    if session.get('auth_user'):
+    if _session_is_authenticated():
         return redirect(_safe_next_url(request.args.get('next')) or url_for('index'))
 
     next_url = _safe_next_url(request.values.get('next'))
@@ -442,11 +672,10 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
         if DBManager().authenticate_user(username, password):
-            session.clear()
-            session['auth_user'] = username
-            session['csrf_token'] = secrets.token_urlsafe(24)
-            session.permanent = True
+            _establish_authenticated_session(username, 'password')
+
             _clear_login_failures()
+
             return redirect(next_url or url_for('index'))
 
         _record_login_failure()
@@ -492,6 +721,39 @@ def query_page(file_path):
         'query.html',
         form=serialize_form(form, BASE_DIR),
         file_path=decoded_path,
+        csrf_token=_csrf_token(),
+        **page_context
+    )
+
+
+@app.route('/embed/<form_id>')
+@login_required
+def embed_page(form_id):
+    """通过公开表单 ID 打开已授权表单，并仅接收白名单的外部预填参数。"""
+    form, form_error = _get_web_form_by_id(form_id)
+    if form is None:
+        status = 403 if form_error == 'FORM_NOT_WEB_ENABLED' else 404
+        return error_response('当前表单不可访问。', status, form_error)
+
+    supplied_params = {
+        param.name: request.args.get(param.name)
+        for param in form.params if param.name in request.args
+    }
+    normalized_params, param_error = _validate_external_embed_params(form, supplied_params)
+    if param_error:
+        return error_response('嵌入参数无效。', 400, param_error)
+
+    form_data = serialize_form(form, BASE_DIR)
+    for param in form_data['params']:
+        if param['name'] in normalized_params:
+            param['default'] = normalized_params[param['name']]
+            param['raw_default'] = normalized_params[param['name']]
+
+    page_context = get_embed_context()
+    return render_template(
+        'query.html',
+        form=form_data,
+        file_path=form_data['file_path'],
         csrf_token=_csrf_token(),
         **page_context
     )

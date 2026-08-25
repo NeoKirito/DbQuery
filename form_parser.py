@@ -16,6 +16,7 @@ title = 新建查询
 group = 默认
 description = 查询描述（可选）
 # web_enabled = false  （默认 false；仅 true 时已登录 Web 用户可查看）
+# id = person-detail （可选公开嵌入 ID；仅安全字符 a-z、0-9、_、-）
 # type = select    （默认，SELECT 查询）
 # type = exec      （存储过程，SQL 以 EXEC 开头）
 
@@ -41,6 +42,7 @@ description = 查询描述（可选）
 #   width=220px（或 220、35%、18rem）
 #   searchable              select 开启输入筛选（select 默认可搜索）
 #   allow_custom=true       允许 select/radio 提交候选项外的值（默认 false）
+#   external_allowed=true   允许 Frontend Embed V1 仅在首次打开时预填该参数（默认 false；hidden 永不允许）
 #   options_sql=SELECT ...  只读动态候选 SQL；一列为 value=label，两列为 value,label
 #
 # 默认值中可用 {today}：date/text 为 YYYY-MM-DD，datetime 为 YYYY-MM-DD HH:mm:ss。
@@ -77,7 +79,7 @@ class QueryParam:
 
     def __init__(self, name, label, ptype='text', options=None, default='',
                  placeholder='', required=False, width='', options_sql='',
-                 searchable=False, allow_custom=False):
+                 searchable=False, allow_custom=False, external_allowed=False):
         self.name = name
         self.label = label
         # 保持旧版静态候选项为字符串列表，避免破坏既有调用方。
@@ -90,6 +92,8 @@ class QueryParam:
         self.options_sql = options_sql
         self.searchable = searchable
         self.allow_custom = allow_custom
+        # 外部嵌入仅可预填显式声明的非 hidden 参数；默认拒绝。
+        self.external_allowed = external_allowed
 
 
 class QueryForm:
@@ -102,6 +106,8 @@ class QueryForm:
         self.query_type = 'select'
         # 默认拒绝 Web 访问；必须在 [meta] 明确写 web_enabled = true。
         self.web_enabled = False
+        # 稳定公开嵌入 ID；缺省时不能通过 /embed/<id> 打开。
+        self.public_id = ''
         self.params = []
         self.sql = ''
         self.file_path = ''
@@ -155,6 +161,7 @@ class FormParser:
         options_sql = ''
         searchable = False
         allow_custom = False
+        external_allowed = False
         default_assigned = False
 
         for raw_part in parts:
@@ -188,11 +195,16 @@ class FormParser:
                 if key == 'allow_custom':
                     allow_custom = value.lower() in ('1', 'true', 'yes', 'on', '是')
                     continue
+                if key == 'external_allowed':
+                    external_allowed = value.lower() in ('1', 'true', 'yes', 'on', '是')
+                    continue
+
             if not default_assigned:
                 default = token
                 default_assigned = True
 
-        return default, placeholder, required, width, options_sql, searchable, allow_custom
+        return (default, placeholder, required, width, options_sql, searchable,
+                allow_custom, external_allowed)
 
     @staticmethod
     def parse_file(file_path):
@@ -220,6 +232,8 @@ class FormParser:
                     form.query_type = value.lower().strip()
                 elif key == 'web_enabled':
                     form.web_enabled = value.lower() in ('1', 'true', 'yes', 'on', '是')
+                elif key == 'id':
+                    form.public_id = value
 
         if not form.title:
             form.title = os.path.splitext(os.path.basename(file_path))[0]
@@ -240,10 +254,10 @@ class FormParser:
             raw_type = parts[1] if len(parts) >= 2 else 'text'
             ptype, options = FormParser._parse_type(raw_type)
             (default, placeholder, required, width, options_sql,
-             searchable, allow_custom) = FormParser._parse_param_attributes(parts[2:])
+             searchable, allow_custom, external_allowed) = FormParser._parse_param_attributes(parts[2:])
             form.params.append(QueryParam(
                 name, label, ptype, options, default, placeholder, required, width,
-                options_sql, searchable, allow_custom
+                options_sql, searchable, allow_custom, external_allowed
             ))
 
         form.sql = FormParser._get_section(content, 'sql')

@@ -1,5 +1,7 @@
 # DBQuery 仅前端无密钥无感登录
 
+> **兼容模式（不建议新接入使用）。** 本文档描述历史 `frontend-ticket` → 隐藏 form → `/sso/consume` 流程，接口继续保留以避免破坏已有集成。新的 PEIS 前端应优先使用 README 中的 **DBQuery Frontend Embed V1**：它直接建立 DBQuery Session、提供 `DBQueryEmbed.mount()` 与 `DBQueryEmbed.logout()`，并使用公开 form ID 和 `external_allowed` 参数门控。
+
 ## 适用范围
 
 此模式适用于宿主系统**只有浏览器前端配置、没有可保存共享密钥的宿主后端**的情况。宿主页面在自己的用户完成登录后，以该用户本次登录取得的 `czybm` 与密码向 DBQuery 交换一个**一次性、短时有效**的 ticket；随后由隐藏表单将 ticket `POST` 到 iframe，DBQuery 创建会话并直接显示目标表单。

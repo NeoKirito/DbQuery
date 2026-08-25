@@ -143,6 +143,7 @@
     window.DBQUERY = {
         filePath: "{{ file_path|replace('#', '%23') }}",
         formParams: {{ form.params | tojson }},
+        apiBase: {{ request.script_root | tojson }},
         embedMode: {{ 'true' if embed_mode else 'false' }},
         sidebarHidden: {{ 'true' if sidebar_hidden else 'false' }}
     };
