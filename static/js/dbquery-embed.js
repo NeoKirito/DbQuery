@@ -147,14 +147,24 @@
         options = null;
         var loading = displayLoading(container);
 
-        return request(apiBase, '/api/integration/session', {method: 'GET'})
-            .then(function (sessionState) {
-                if (sessionState.authenticated) return sessionState;
-                if (!username || !password) throw embedError('AUTH_FAILED');
-                return request(apiBase, '/api/integration/frontend-login', {
-                    method: 'POST', body: {username: username, password: password}
+        // PEIS 已传入本次登录凭据时直接建立 DBQuery Session。不要先做 GET
+        // 探测：同源反向代理下浏览器通常不会给 GET 附带 Origin，服务端会按
+        // 安全策略返回 403，导致真正的登录请求永远没有机会执行。
+        var sessionRequest;
+        if (username && password) {
+            sessionRequest = request(apiBase, '/api/integration/frontend-login', {
+                method: 'POST', body: {username: username, password: password}
+            });
+        } else {
+            // 未传凭据时才复用已有 Session；未登录则给出统一认证错误。
+            sessionRequest = request(apiBase, '/api/integration/session', {method: 'GET'})
+                .then(function (sessionState) {
+                    if (!sessionState.authenticated) throw embedError('AUTH_FAILED');
+                    return sessionState;
                 });
-            })
+        }
+
+        return sessionRequest
             .then(function () {
                 // 认证完成后 SDK 不再保存或主动持有 password 引用。
                 username = '';

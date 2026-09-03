@@ -70,8 +70,7 @@ async function testLoginThenHome() {
   const calls = [];
   const sdk = loadSdk(function (url, options) {
     calls.push({url: url, options: options});
-    if (calls.length === 1) return Promise.resolve(response({authenticated: false}));
-    if (calls.length === 2) return Promise.resolve(response({authenticated: true}));
+    if (calls.length === 1) return Promise.resolve(response({authenticated: true}));
     throw new Error('Unexpected request');
   });
   const container = new Element('div');
@@ -81,9 +80,10 @@ async function testLoginThenHome() {
     password: 'secret',
     apiBase: '/dbquery'
   });
-  assert.strictEqual(calls.length, 2);
-  assert.strictEqual(calls[0].url, '/dbquery/api/integration/session');
-  assert.strictEqual(calls[1].url, '/dbquery/api/integration/frontend-login');
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].url, '/dbquery/api/integration/frontend-login');
+  assert.strictEqual(calls[0].options.method, 'POST');
+  assert.strictEqual(calls[0].options.credentials, 'include');
   assert.strictEqual(result.iframe.src, '/dbquery/');
   assert.strictEqual(result.iframe.style.width, '100%');
   assert.strictEqual(result.iframe.style.height, '100%');
@@ -105,8 +105,6 @@ async function testExistingSessionAndTrailingSlash() {
   const container = new Element('div');
   const result = await sdk.mount({
     el: container,
-    username: 'tester',
-    password: 'secret',
     apiBase: '/dbquery/'
   });
   assert.strictEqual(calls.length, 1);
@@ -118,7 +116,7 @@ async function testDefaultBaseAndLogout() {
   const calls = [];
   const sdk = loadSdk(function (url, options) {
     calls.push({url: url, options: options});
-    if (url === '/api/integration/session') return Promise.resolve(response({authenticated: true}));
+    if (url === '/api/integration/frontend-login') return Promise.resolve(response({authenticated: true}));
     if (url === '/api/integration/logout') return Promise.resolve(response({success: true}));
     throw new Error('Unexpected request: ' + url);
   });
@@ -130,10 +128,25 @@ async function testDefaultBaseAndLogout() {
   assert.strictEqual(calls[1].options.method, 'POST');
 }
 
+async function testMissingCredentialsUsesSessionProbe() {
+  const calls = [];
+  const sdk = loadSdk(function (url, options) {
+    calls.push({url: url, options: options});
+    return Promise.resolve(response({authenticated: true}));
+  });
+  const container = new Element('div');
+  const result = await sdk.mount({el: container, apiBase: '/dbquery'});
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].url, '/dbquery/api/integration/session');
+  assert.strictEqual(calls[0].options.method, 'GET');
+  assert.strictEqual(result.iframe.src, '/dbquery/');
+}
+
 Promise.resolve()
   .then(testLoginThenHome)
   .then(testExistingSessionAndTrailingSlash)
   .then(testDefaultBaseAndLogout)
+  .then(testMissingCredentialsUsesSessionProbe)
   .then(function () { console.log('DBQueryEmbed SDK tests passed'); })
   .catch(function (error) {
     console.error(error && error.stack ? error.stack : error);

@@ -21,7 +21,7 @@ DBQueryEmbed.mount({
 </script>
 ```
 
-认证成功后的 iframe 地址为 `/dbquery/`，而不是某个指定表单地址。若已存在 DBQuery Session，SDK 只检查 `/api/integration/session` 并直接创建 iframe，不会重复发送账号密码。`DBQueryEmbed.logout({ apiBase: '/dbquery' })` 只退出 DBQuery，不会修改 PEIS 的 localStorage、token 或用户状态。
+认证成功后的 iframe 地址为 `/dbquery/`，而不是某个指定表单地址。传入账号密码时 SDK 会直接调用 `/api/integration/frontend-login`，不会先调用可能因同源 GET 缺少 `Origin` 而返回 403 的 Session 探测接口；只有未传账号密码时才调用 `/api/integration/session` 复用已有会话。`DBQueryEmbed.logout({ apiBase: '/dbquery' })` 只退出 DBQuery，不会修改 PEIS 的 localStorage、token 或用户状态。
 
 ### Vue 2 用法
 

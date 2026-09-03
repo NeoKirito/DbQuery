@@ -59,8 +59,8 @@ DBQuery Frontend Embed V1 用于复用 PEIS 前端在本次登录流程中已持
 
 ```text
 PEIS frontend
-  → GET /api/integration/session
-  →（未登录时）POST /api/integration/frontend-login
+  → 有账号密码时直接 POST /api/integration/frontend-login
+  → 未传账号密码时 GET /api/integration/session 复用已有会话
   → qx_czyxx 参数化验证
   → DBQuery HttpOnly Session
   → iframe.src = /dbquery/
