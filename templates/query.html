@@ -23,11 +23,19 @@
 
     <section class="app-main">
         <header class="page-header">
-            <div class="page-title-block">
-                <h1 class="page-title">{{ form.title }}</h1>
-                {% if form.description %}
-                <p class="page-desc">{{ form.description }}</p>
-                {% endif %}
+            <div class="page-heading-left">
+                <a class="report-home-link"
+                   href="{{ url_for('index', embed=1, hide_header=1, sidebar=0) if embed_mode else url_for('index') }}"
+                   aria-label="返回报表主页" title="返回报表主页">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+                    <span>返回报表主页</span>
+                </a>
+                <div class="page-title-block">
+                    <h1 class="page-title">{{ form.title }}</h1>
+                    {% if form.description %}
+                    <p class="page-desc">{{ form.description }}</p>
+                    {% endif %}
+                </div>
             </div>
             {% if sidebar_hidden %}
             <div class="project-switcher" id="project-switcher">

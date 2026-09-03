@@ -463,6 +463,9 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn('查询条件', html)
         self.assertIn('查询结果', html)
         self.assertIn('project-switcher', html)
+        self.assertIn('class="report-home-link"', html)
+        self.assertIn('返回报表主页', html)
+        self.assertIn('href="/?embed=1&amp;hide_header=1&amp;sidebar=0"', html)
         self.assertNotIn('class="app-sidebar"', html)
         self.assertNotIn('type-badge', html)
         self.assertNotIn('>SELECT<', html)
@@ -473,6 +476,13 @@ class WebRouteTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertIn('class="app-sidebar"', html)
         self.assertNotIn('project-switcher', html)
+
+    def test_standalone_query_back_button_returns_to_report_home(self):
+        response = self.client.get('/query/{}'.format(self.file_path))
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('class="report-home-link"', html)
+        self.assertIn('href="/"', html)
 
     def test_forms_api_and_limited_query_response(self):
         response = self.client.get('/api/forms')
