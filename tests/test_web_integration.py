@@ -484,6 +484,28 @@ class WebRouteTests(unittest.TestCase):
         self.assertIn('class="report-home-link"', html)
         self.assertIn('href="/"', html)
 
+    def test_result_grid_keeps_controls_header_and_pagination_visible(self):
+        response = self.client.get('/query/{}?embed=1'.format(self.file_path))
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('id="result-warning"', html)
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, 'static', 'js', 'app.js'), encoding='utf-8') as source:
+            javascript = source.read()
+        with open(os.path.join(root, 'static', 'css', 'style.css'), encoding='utf-8') as source:
+            stylesheet = source.read()
+
+        self.assertIn("<'dt-topbar'<'dt-page-size'l><'dt-filter'f>>", javascript)
+        self.assertIn("<'dt-bottombar'<'dt-info'i><'dt-pagination'p>>", javascript)
+        self.assertIn("pageLength: 100", javascript)
+        self.assertIn("lengthMenu: '每页显示 _MENU_ 条'", javascript)
+        self.assertIn("info: '显示第 _START_ 至 _END_ 条，共 _TOTAL_ 条'", javascript)
+        self.assertIn("previous: '上一页', next: '下一页'", javascript)
+        self.assertIn('.result-panel .dataTables_scrollHead', stylesheet)
+        self.assertIn('.result-panel .dataTables_scrollBody', stylesheet)
+        self.assertIn('overflow: auto !important;', stylesheet)
+
     def test_forms_api_and_limited_query_response(self):
         response = self.client.get('/api/forms')
         self.assertEqual(response.status_code, 200)

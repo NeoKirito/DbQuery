@@ -1,6 +1,7 @@
 /* DBQuery Web 前端交互：嵌入状态、查询与导出。 */
 var lastQueryResult = null;
 var dataTable = null;
+var resultGridResizeTimer = null;
 
 function apiPath(path) {
     var base = (window.DBQUERY && window.DBQUERY.apiBase) || '';
@@ -460,6 +461,7 @@ function executeQuery() {
     if (!validateRequiredParams()) return;
 
     clearInlineMessage();
+    clearResultWarning();
     setQueryLoading(true);
     $('#result-empty').hide();
     $('#status-text').text('正在查询，请稍候…');
@@ -479,10 +481,7 @@ function executeQuery() {
             $('#status-text').text(querySummary(data));
             setExportLoading(false);
             if (data.truncated) {
-                showInlineMessage(
-                    'warning',
-                    '查询结果较多，当前显示前 ' + data.max_rows + ' 条，请适当缩小查询范围。'
-                );
+                setResultWarning('已显示前 ' + data.max_rows + ' 条，请缩小查询范围。');
             }
         },
         error: function (xhr) {
@@ -496,6 +495,7 @@ function executeQuery() {
 
 function handleQueryFailure(message) {
     lastQueryResult = null;
+    clearResultWarning();
     setExportLoading(false);
     $('#status-text').text('查询未完成');
     $('#result-empty').text('暂无符合条件的数据').show();
@@ -559,6 +559,9 @@ function renderResult(data) {
         info: true,
         scrollX: true,
         autoWidth: false,
+        dom: "<'dt-topbar'<'dt-page-size'l><'dt-filter'f>>" +
+            "t" +
+            "<'dt-bottombar'<'dt-info'i><'dt-pagination'p>>",
         language: {
             search: '筛选：',
             lengthMenu: '每页显示 _MENU_ 条',
@@ -569,6 +572,7 @@ function renderResult(data) {
             zeroRecords: '暂无符合条件的数据'
         }
     });
+    bindResultGridLayout();
     if (data.row_count) {
         $('#result-empty').hide();
     } else {
@@ -667,6 +671,26 @@ function showInlineMessage(type, message) {
 
 function clearInlineMessage() {
     $('#result-message').addClass('d-none').removeClass('message-warning message-error message-success').text('');
+}
+
+function setResultWarning(message) {
+    $('#result-warning').removeClass('d-none').text(message || '');
+}
+
+function clearResultWarning() {
+    $('#result-warning').addClass('d-none').text('');
+}
+
+function bindResultGridLayout() {
+    $(window).off('resize.resultGridLayout').on('resize.resultGridLayout', function () {
+        window.clearTimeout(resultGridResizeTimer);
+        resultGridResizeTimer = window.setTimeout(function () {
+            if (dataTable) dataTable.columns.adjust();
+        }, 120);
+    });
+    window.setTimeout(function () {
+        if (dataTable) dataTable.columns.adjust();
+    }, 0);
 }
 
 function showToast(message, type) {
