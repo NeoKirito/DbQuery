@@ -5,7 +5,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QMessageBox,
-    QApplication, QSpinBox
+    QApplication
 )
 from PyQt5.QtCore import Qt
 
@@ -84,51 +84,24 @@ class ConfigDialog(QDialog):
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
-        integration_grp = QGroupBox("宿主程序无感登录")
+        integration_grp = QGroupBox("前端无感登录")
         integration_form = QFormLayout(integration_grp)
         integration_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.integration_enabled_check = QCheckBox("启用受签名的宿主无感登录")
-        self.integration_key_edit = QLineEdit()
-        self.integration_key_edit.setEchoMode(QLineEdit.Password)
-        self.integration_key_edit.setPlaceholderText("生成后仅配置在 DBQuery 和宿主后端；不要放入前端或 URL")
-        self.integration_show_key_check = QCheckBox("显示")
-        self.integration_show_key_check.toggled.connect(self._toggle_integration_key_visibility)
-        generate_key_btn = QPushButton("生成新密钥")
-        generate_key_btn.clicked.connect(self._generate_integration_key)
-        key_row = QHBoxLayout()
-        key_row.addWidget(self.integration_key_edit)
-        key_row.addWidget(self.integration_show_key_check)
-        key_row.addWidget(generate_key_btn)
-
-        self.integration_ttl_spin = QSpinBox()
-        self.integration_ttl_spin.setRange(10, 300)
-        self.integration_ttl_spin.setSuffix(" 秒")
-        self.integration_skew_spin = QSpinBox()
-        self.integration_skew_spin.setRange(10, 300)
-        self.integration_skew_spin.setSuffix(" 秒")
-        integration_form.addRow("", self.integration_enabled_check)
-        integration_form.addRow("共享密钥:", key_row)
-        integration_form.addRow("票据有效期:", self.integration_ttl_spin)
-        integration_form.addRow("允许时钟偏差:", self.integration_skew_spin)
-        integration_hint = QLabel(
-            "<small><i>推荐方式：宿主后端用密钥签名后请求短期票据；浏览器仅通过 iframe POST 消费票据。"
-            "密钥轮换后，请同步更新宿主后端配置。</i></small>"
+        self.frontend_embed_enabled_check = QCheckBox("启用前端无感登录")
+        self.frontend_embed_origins_edit = QLineEdit()
+        self.frontend_embed_origins_edit.setPlaceholderText(
+            "如: http://192.168.0.51:8080"
         )
-        integration_hint.setWordWrap(True)
-        integration_form.addRow("", integration_hint)
-
-        self.frontend_integration_enabled_check = QCheckBox("启用仅前端无密钥登录（兼容模式）")
-        self.frontend_allowed_origins_edit = QLineEdit()
-        self.frontend_allowed_origins_edit.setPlaceholderText("如: https://portal.example.com, http://127.0.0.1:8080")
-        frontend_hint = QLabel(
-            "<small><i>仅适用于没有宿主后端的场景。必须填写宿主页面的精确 Origin（协议、域名、端口），"
-            "不能填 *、路径或 DBQuery 地址。前端必须在用户本次登录后从内存取账号密码，禁止在配置、URL、"
-            "localStorage 或源码中固化密码。</i></small>"
+        embed_hint = QLabel(
+            "<small><i>用于把完整 DBQuery 页面嵌入业务系统。前端地址请填写浏览器中 "
+            "location.origin 的值，只能包含协议、域名或 IP、端口；不能带页面路径、# 或 *。"
+            "多个地址用英文逗号分隔。账号和密码由前端当前登录流程传入，不要写入 URL 或前端配置。"
+            "</i></small>"
         )
-        frontend_hint.setWordWrap(True)
-        integration_form.addRow("", self.frontend_integration_enabled_check)
-        integration_form.addRow("允许的前端 Origin:", self.frontend_allowed_origins_edit)
-        integration_form.addRow("", frontend_hint)
+        embed_hint.setWordWrap(True)
+        integration_form.addRow("", self.frontend_embed_enabled_check)
+        integration_form.addRow("前端地址:", self.frontend_embed_origins_edit)
+        integration_form.addRow("", embed_hint)
 
         layout.addWidget(integration_grp)
 
@@ -156,17 +129,6 @@ class ConfigDialog(QDialog):
                   self.user_label, self.pass_label):
             w.setEnabled(not trusted)
 
-    def _toggle_integration_key_visibility(self, visible):
-        self.integration_key_edit.setEchoMode(
-            QLineEdit.Normal if visible else QLineEdit.Password
-        )
-
-    def _generate_integration_key(self):
-        from db_manager import DBManager
-        self.integration_key_edit.setText(DBManager.generate_integration_key())
-        self.integration_key_edit.setFocus()
-        self.integration_key_edit.selectAll()
-
     def _load_current(self):
         cfg = self.db_manager.get_db_config()
         self.server_edit.setText(cfg.get('server', ''))
@@ -186,16 +148,12 @@ class ConfigDialog(QDialog):
         self.pass_edit.setText(cfg.get('password', ''))
         self._toggle_auth(Qt.Checked if trusted else Qt.Unchecked)
 
-        integration_cfg = self.db_manager.get_integration_config()
-        self.integration_enabled_check.setChecked(bool(integration_cfg.get('enabled')))
-        self.integration_key_edit.setText(integration_cfg.get('shared_key', ''))
-        self.integration_ttl_spin.setValue(integration_cfg.get('ticket_ttl_seconds', 60))
-        self.integration_skew_spin.setValue(integration_cfg.get('max_clock_skew_seconds', 60))
-        self.frontend_integration_enabled_check.setChecked(
-            bool(integration_cfg.get('frontend_enabled'))
+        self._integration_cfg = self.db_manager.get_integration_config()
+        self.frontend_embed_enabled_check.setChecked(
+            bool(self._integration_cfg.get('frontend_embed_enabled'))
         )
-        self.frontend_allowed_origins_edit.setText(
-            ', '.join(integration_cfg.get('frontend_allowed_origins', []))
+        self.frontend_embed_origins_edit.setText(
+            ', '.join(self._integration_cfg.get('frontend_embed_allowed_origins', []))
         )
 
     def _build_config_dict(self):
@@ -210,15 +168,16 @@ class ConfigDialog(QDialog):
         }
 
     def _build_integration_config(self):
-        return {
-            'enabled': self.integration_enabled_check.isChecked(),
-            'shared_key': self.integration_key_edit.text().strip(),
-            'ticket_ttl_seconds': self.integration_ttl_spin.value(),
-            'max_clock_skew_seconds': self.integration_skew_spin.value(),
-            'frontend_enabled': self.frontend_integration_enabled_check.isChecked(),
-            'frontend_allowed_origins': self.frontend_allowed_origins_edit.text().strip(),
-
-        }
+        # 旧集成字段不再占用界面，但原值仍会保留，避免升级后破坏已有接入。
+        integration_cfg = dict(self._integration_cfg)
+        origins = self.frontend_embed_origins_edit.text().strip()
+        integration_cfg.update({
+            'frontend_embed_enabled': self.frontend_embed_enabled_check.isChecked(),
+            'frontend_embed_allowed_origins': origins,
+            # 同一份白名单同时控制 CORS 和 iframe 祖先，现场只需填写一次。
+            'frame_ancestors': origins,
+        })
+        return integration_cfg
 
     def _test(self):
         cfg = self._build_config_dict()
@@ -248,18 +207,15 @@ class ConfigDialog(QDialog):
             QMessageBox.warning(self, "提示", "请填写数据库名称")
             return
         integration_cfg = self._build_integration_config()
-        if integration_cfg['enabled'] and len(integration_cfg['shared_key']) < 32:
-            QMessageBox.warning(self, "提示", "启用受签名宿主无感登录前，请生成并保存至少 32 个字符的共享密钥")
-            return
-        if integration_cfg['frontend_enabled']:
+        if integration_cfg['frontend_embed_enabled']:
             from db_manager import DBManager
             origins = DBManager._parse_allowed_origins(
-                integration_cfg['frontend_allowed_origins']
+                integration_cfg['frontend_embed_allowed_origins']
             )
             if not origins:
                 QMessageBox.warning(
                     self, "提示",
-                    "启用仅前端无密钥登录前，请填写至少一个精确 Origin，例如 https://portal.example.com"
+                    "启用前端无感登录前，请填写有效的前端地址，例如 http://192.168.0.51:8080"
                 )
                 return
         self.db_manager.set_db_config(cfg)

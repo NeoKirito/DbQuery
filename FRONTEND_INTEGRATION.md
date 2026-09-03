@@ -6,6 +6,8 @@
 
 Frontend Embed V1 只做一件事：PEIS 显式传入当前账号和密码，DBQuery 独立验证后建立自己的 Session，再将**完整 DBQuery Web 首页**放入 iframe。用户在 DBQuery 内自行选择表单、输入条件、查询、切换和导出；PEIS 不传业务参数、查询条件、表单 ID 或 SQL。
 
+DBQuery 端只需打开“数据库连接配置 → 前端无感登录”，勾选“启用前端无感登录”，并在“前端地址”中填写 PEIS 页面 `location.origin` 的值，例如 `http://192.168.0.51:8080`。不要填写 `#/director/reportStatistics` 等页面路径；多个前端地址用英文逗号分隔。
+
 ```html
 <script src="/dbquery/static/js/dbquery-embed.js"></script>
 <div id="dbquery" style="height: 100%"></div>

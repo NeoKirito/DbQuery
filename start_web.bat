@@ -53,7 +53,7 @@ echo Firewall access enabled for TCP port %WEB_PORT%.
 
 :: Get IP
 set "L_IP=127.0.0.1"
-for /f "tokens=4" %%a in ('route print ^| findstr 0.0.0.0 ^| findstr /v 127.0.0.1') do set "L_IP=%%a"
+for /f "tokens=4" %%a in ('route print -4 ^| findstr /R /C:"^[ ]*0\.0\.0\.0[ ]*0\.0\.0\.0" ^| findstr /V /C:"Default"') do set "L_IP=%%a"
 
 echo.
 echo   Local:   http://localhost:%WEB_PORT%
@@ -66,5 +66,5 @@ echo.
 start "" "%EXE_PATH%" --web --port %WEB_PORT%
 echo Service started in background.
 
-timeout /t 5
-endlocal
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
+endlocal & exit /b 0

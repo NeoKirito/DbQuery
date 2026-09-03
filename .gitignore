@@ -1,0 +1,12 @@
+# Python caches and test state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# PyInstaller output
+build/
+dist/
+dist_final/
+
+# Runtime logs
+*.log
