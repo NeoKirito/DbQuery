@@ -24,7 +24,7 @@
                 </div>
                 <div class="nav-group-items">
                     {% for form in forms %}
-                    <a href="/query/{{ form.file_path|replace('#', '%23') }}" class="nav-item-link{% if form.description %} has-desc{% endif %}" data-title="{{ form.title|lower }}">
+                    <a href="{{ url_for('query_page', file_path=form.file_path) }}" class="nav-item-link{% if form.description %} has-desc{% endif %}" data-title="{{ form.title|lower }}">
                         <svg class="icon nav-item-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
                         <span class="nav-item-content">
                             <span class="nav-item-title">{{ form.title }}</span>
@@ -65,7 +65,7 @@
                 <div class="project-group">
                     <div class="project-group-title">{{ group }}</div>
                     {% for form in forms %}
-                    <a class="project-card" href="/query/{{ form.file_path|replace('#', '%23') }}">
+                    <a class="project-card" href="{{ url_for('query_page', file_path=form.file_path) }}">
                         <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
                         <span>
                             <strong>{{ form.title }}</strong>

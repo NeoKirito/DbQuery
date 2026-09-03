@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QApplication
 )
 from PyQt5.QtCore import Qt
+from urllib.parse import urlparse
 
 
 class ConfigDialog(QDialog):
@@ -88,19 +89,16 @@ class ConfigDialog(QDialog):
         integration_form = QFormLayout(integration_grp)
         integration_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.frontend_embed_enabled_check = QCheckBox("启用前端无感登录")
-        self.frontend_embed_origins_edit = QLineEdit()
-        self.frontend_embed_origins_edit.setPlaceholderText(
-            "如: http://192.168.0.51:8080"
-        )
+        self.frontend_address_edit = QLineEdit()
+        self.frontend_address_edit.setPlaceholderText("如: 192.168.0.39:8080")
         embed_hint = QLabel(
-            "<small><i>用于把完整 DBQuery 页面嵌入业务系统。前端地址请填写浏览器中 "
-            "location.origin 的值，只能包含协议、域名或 IP、端口；不能带页面路径、# 或 *。"
-            "多个地址用英文逗号分隔。账号和密码由前端当前登录流程传入，不要写入 URL 或前端配置。"
+            "<small><i>填写业务前端的 IP 和端口即可，保存后会自动补全 HTTP 协议，并同步所有"
+            "前端授权配置。不要填写页面路径或 # 后面的路由；HTTPS 地址请填写完整协议。"
             "</i></small>"
         )
         embed_hint.setWordWrap(True)
         integration_form.addRow("", self.frontend_embed_enabled_check)
-        integration_form.addRow("前端地址:", self.frontend_embed_origins_edit)
+        integration_form.addRow("前端 IP:端口:", self.frontend_address_edit)
         integration_form.addRow("", embed_hint)
 
         layout.addWidget(integration_grp)
@@ -152,9 +150,42 @@ class ConfigDialog(QDialog):
         self.frontend_embed_enabled_check.setChecked(
             bool(self._integration_cfg.get('frontend_embed_enabled'))
         )
-        self.frontend_embed_origins_edit.setText(
-            ', '.join(self._integration_cfg.get('frontend_embed_allowed_origins', []))
+        origins = (
+            self._integration_cfg.get('frontend_embed_allowed_origins', []) or
+            self._integration_cfg.get('frontend_allowed_origins', []) or
+            self._integration_cfg.get('frame_ancestors', [])
         )
+        self.frontend_address_edit.setText(
+            self._display_frontend_address(origins[0]) if origins else ''
+        )
+
+    @staticmethod
+    def _display_frontend_address(origin):
+        """HTTP 地址只显示主机和端口，HTTPS 保留协议以免保存时降级。"""
+        parsed = urlparse(str(origin or '').strip())
+        if parsed.scheme.lower() == 'http' and parsed.netloc:
+            return parsed.netloc
+        return str(origin or '').strip()
+
+    @staticmethod
+    def _frontend_origin(address):
+        """把单个“IP/主机:端口”规范化为可保存的 Origin。"""
+        from db_manager import DBManager
+
+        value = str(address or '').strip()
+        if not value or any(separator in value for separator in (',', ';', '\n')):
+            return ''
+        candidate = value if '://' in value else 'http://' + value
+        origins = DBManager._parse_allowed_origins(candidate)
+        if len(origins) != 1:
+            return ''
+        try:
+            parsed = urlparse(origins[0])
+            if parsed.port is None:
+                return ''
+        except ValueError:
+            return ''
+        return origins[0]
 
     def _build_config_dict(self):
         return {
@@ -170,12 +201,13 @@ class ConfigDialog(QDialog):
     def _build_integration_config(self):
         # 旧集成字段不再占用界面，但原值仍会保留，避免升级后破坏已有接入。
         integration_cfg = dict(self._integration_cfg)
-        origins = self.frontend_embed_origins_edit.text().strip()
+        origin = self._frontend_origin(self.frontend_address_edit.text())
         integration_cfg.update({
             'frontend_embed_enabled': self.frontend_embed_enabled_check.isChecked(),
-            'frontend_embed_allowed_origins': origins,
-            # 同一份白名单同时控制 CORS 和 iframe 祖先，现场只需填写一次。
-            'frame_ancestors': origins,
+            # 单个前端地址同步给旧前端接口、Embed CORS 和 iframe CSP。
+            'frontend_allowed_origins': origin,
+            'frontend_embed_allowed_origins': origin,
+            'frame_ancestors': origin,
         })
         return integration_cfg
 
@@ -208,14 +240,10 @@ class ConfigDialog(QDialog):
             return
         integration_cfg = self._build_integration_config()
         if integration_cfg['frontend_embed_enabled']:
-            from db_manager import DBManager
-            origins = DBManager._parse_allowed_origins(
-                integration_cfg['frontend_embed_allowed_origins']
-            )
-            if not origins:
+            if not integration_cfg['frontend_embed_allowed_origins']:
                 QMessageBox.warning(
                     self, "提示",
-                    "启用前端无感登录前，请填写有效的前端地址，例如 http://192.168.0.51:8080"
+                    "请填写有效的前端 IP 和端口，例如 192.168.0.39:8080"
                 )
                 return
         self.db_manager.set_db_config(cfg)

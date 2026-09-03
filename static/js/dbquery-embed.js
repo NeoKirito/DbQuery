@@ -3,6 +3,7 @@
     'use strict';
 
     var lastApiBase = null;
+    var lastEmbedSession = null;
     var ERROR_MESSAGES = {
         AUTH_FAILED: '查询工具加载失败',
         ORIGIN_DENIED: '查询工具加载失败',
@@ -102,7 +103,14 @@
         return Promise.reject(error);
     }
 
-    function createIframe(container, apiBase, loading, onReady) {
+    function resolveEmbedUrl(apiBase, state) {
+        var embedPath = state && state.embed_path ? String(state.embed_path) : '';
+        if (!embedPath) return homeUrl(apiBase);
+        if (/^https?:\/\//i.test(embedPath)) return embedPath;
+        return String(apiBase || '').replace(/\/$/, '') + '/' + embedPath.replace(/^\//, '');
+    }
+
+    function createIframe(container, iframeUrl, loading, onReady) {
         return new Promise(function (resolve, reject) {
             var iframe = document.createElement('iframe');
             iframe.className = 'dbquery-embed-frame';
@@ -123,7 +131,7 @@
                 reject(embedError('LOAD_FAILED'));
             };
             // 认证完成后固定进入完整 DBQuery Web 首页；不传 form、params 或业务条件。
-            iframe.src = homeUrl(apiBase);
+            iframe.src = iframeUrl;
             container.appendChild(iframe);
         });
     }
@@ -147,9 +155,8 @@
         options = null;
         var loading = displayLoading(container);
 
-        // PEIS 已传入本次登录凭据时直接建立 DBQuery Session。不要先做 GET
-        // 探测：同源反向代理下浏览器通常不会给 GET 附带 Origin，服务端会按
-        // 安全策略返回 403，导致真正的登录请求永远没有机会执行。
+        // PEIS 已传入本次登录凭据时直接换取 DBQuery 的跨站 iframe 会话。
+        // 不先探测 Cookie Session，避免第三方 Cookie 策略阻断真正的登录流程。
         var sessionRequest;
         if (username && password) {
             sessionRequest = request(apiBase, '/api/integration/frontend-login', {
@@ -165,13 +172,17 @@
         }
 
         return sessionRequest
-            .then(function () {
+            .then(function (sessionState) {
                 // 认证完成后 SDK 不再保存或主动持有 password 引用。
                 username = '';
                 password = '';
                 // 根路径以 '/' 作为可恢复的来源值保存，避免 logout 将空字符串重新推断为脚本地址。
                 lastApiBase = apiBase || '/';
-                return createIframe(container, apiBase, loading, onReady);
+                lastEmbedSession = sessionState && sessionState.embed_session
+                    ? String(sessionState.embed_session) : null;
+                return createIframe(
+                    container, resolveEmbedUrl(apiBase, sessionState), loading, onReady
+                );
             })
             .catch(function (error) {
                 username = '';
@@ -191,8 +202,10 @@
             source = lastApiBase;
         }
         var apiBase = normalizeApiBase(source);
-        return request(apiBase, '/api/integration/logout', {method: 'POST'}).then(function (payload) {
+        var body = lastEmbedSession ? {embed_session: lastEmbedSession} : {};
+        return request(apiBase, '/api/integration/logout', {method: 'POST', body: body}).then(function (payload) {
             lastApiBase = null;
+            lastEmbedSession = null;
             return payload;
         });
     }

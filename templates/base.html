@@ -18,6 +18,10 @@
     </main>
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
     {% if page_name|default('app') != 'login' %}
+    <script>
+        window.DBQUERY = window.DBQUERY || {};
+        window.DBQUERY.apiBase = {{ request.script_root | tojson }};
+    </script>
     <script src="{{ url_for('static', filename='vendor/jquery.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
     <script src="{{ url_for('static', filename='vendor/jquery.dataTables.min.js') }}"></script>

@@ -52,6 +52,8 @@ class FrontendEmbedV1Tests(unittest.TestCase):
         self.client = web_server.app.test_client()
         with web_server._LOGIN_LOCK:
             web_server._LOGIN_FAILURES.clear()
+        with web_server._INTEGRATION_LOCK:
+            web_server._EMBED_SESSIONS.clear()
 
     def manager_patch(self, manager):
         return patch('web_server.DBManager', return_value=manager)
@@ -75,7 +77,7 @@ class FrontendEmbedV1Tests(unittest.TestCase):
         self.assertEqual(response.get_json()['error_type'], 'SESSION_FAILED')
         self.assertFalse(manager.authenticate_calls)
 
-    def test_allowed_origin_login_creates_http_only_dbquery_session(self):
+    def test_allowed_origin_login_creates_cookie_and_server_embed_session(self):
         manager = EmbedManager()
         response = self.request_login(manager)
         self.assertEqual(response.status_code, 200)
@@ -84,6 +86,9 @@ class FrontendEmbedV1Tests(unittest.TestCase):
         self.assertIn('HttpOnly', response.headers.get('Set-Cookie', ''))
         payload = response.get_json()
         self.assertTrue(payload['authenticated'])
+        self.assertTrue(payload['embed_path'].startswith('/embed-session/'))
+        self.assertIn(payload['embed_session'], payload['embed_path'])
+        self.assertIn(payload['embed_session'], web_server._EMBED_SESSIONS)
         self.assertNotIn('password', response.get_data(as_text=True).lower())
         self.assertEqual(manager.authenticate_calls, [('tester', 'correct')])
         with self.client.session_transaction() as state:
@@ -91,6 +96,45 @@ class FrontendEmbedV1Tests(unittest.TestCase):
             self.assertEqual(state.get('auth_source'), 'frontend_embed_v1')
             self.assertNotIn('password', state)
             self.assertIn('auth_expires_at', state)
+
+    def test_cookie_less_cross_site_iframe_opens_home_and_api(self):
+        manager = EmbedManager()
+        payload = self.request_login(manager).get_json()
+        embed_path = payload['embed_path']
+        embed_base = embed_path.split('?', 1)[0]
+        cookie_less_client = web_server.app.test_client(use_cookies=False)
+
+        with self.manager_patch(manager):
+            home = cookie_less_client.get(embed_path)
+            forms = cookie_less_client.get(embed_base + 'api/forms')
+
+        self.assertEqual(home.status_code, 200)
+        self.assertNotIn('综合查询登录', home.get_data(as_text=True))
+        self.assertIn(embed_base + 'static/js/app.js', home.get_data(as_text=True))
+        self.assertEqual(home.headers.get('Referrer-Policy'), 'no-referrer')
+        self.assertEqual(forms.status_code, 200)
+
+    def test_expired_embed_session_is_rejected_without_login_redirect(self):
+        manager = EmbedManager()
+        payload = self.request_login(manager).get_json()
+        with web_server._INTEGRATION_LOCK:
+            web_server._EMBED_SESSIONS[payload['embed_session']]['expires_at'] = 0
+
+        response = web_server.app.test_client(use_cookies=False).get(payload['embed_path'])
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn('嵌入会话已失效', response.get_data(as_text=True))
+        self.assertIsNone(response.headers.get('Location'))
+
+    def test_embed_session_is_bound_to_the_login_browser(self):
+        manager = EmbedManager()
+        payload = self.request_login(manager).get_json()
+
+        response = web_server.app.test_client(use_cookies=False).get(
+            payload['embed_path'], headers={'User-Agent': 'another-browser'}
+        )
+
+        self.assertEqual(response.status_code, 401)
 
     def test_forbidden_origin_is_rejected_before_database_authentication(self):
         manager = EmbedManager()
@@ -145,12 +189,17 @@ class FrontendEmbedV1Tests(unittest.TestCase):
 
     def test_logout_invalidates_only_dbquery_session(self):
         manager = EmbedManager()
-        self.establish_session()
+        login = self.request_login(manager)
+        embed_session = login.get_json()['embed_session']
         with self.manager_patch(manager):
-            logout = self.client.post('/api/integration/logout', headers={'Origin': self.origin})
+            logout = self.client.post(
+                '/api/integration/logout', headers={'Origin': self.origin},
+                json={'embed_session': embed_session}
+            )
             session_state = self.client.get('/api/integration/session', headers={'Origin': self.origin})
         self.assertEqual(logout.status_code, 200)
         self.assertEqual(session_state.get_json(), {'authenticated': False})
+        self.assertNotIn(embed_session, web_server._EMBED_SESSIONS)
 
     def test_csp_uses_configured_frame_ancestors_without_x_frame_options(self):
         manager = EmbedManager(frame_ancestors=['https://peis.example.com'])

@@ -72,35 +72,42 @@ class ConfigDialogTest(unittest.TestCase):
         self.assertIn('前端无感登录', group_titles)
         self.assertTrue(dialog.frontend_embed_enabled_check.isChecked())
         self.assertEqual(
-            dialog.frontend_embed_origins_edit.text(), 'http://192.168.0.51:8080'
+            dialog.frontend_address_edit.text(), '192.168.0.51:8080'
         )
-        self.assertIn('location.origin', help_text)
-        self.assertIn('不能带页面路径、# 或 *', help_text)
+        self.assertIn('自动补全 HTTP 协议', help_text)
+        self.assertIn('同步所有前端授权配置', help_text)
         self.assertFalse(hasattr(dialog, 'integration_key_edit'))
         self.assertFalse(hasattr(dialog, 'frontend_integration_enabled_check'))
         dialog.close()
 
-    def test_build_config_reuses_one_origin_list_and_preserves_hidden_legacy_values(self):
+    def test_build_config_normalizes_one_address_and_syncs_all_origin_fields(self):
         _, dialog = self.create_dialog()
-        dialog.frontend_embed_origins_edit.setText(
-            'http://192.168.0.51:8080, https://peis.example.com'
-        )
+        dialog.frontend_address_edit.setText('192.168.0.39:8080')
         config = dialog._build_integration_config()
 
         self.assertTrue(config['enabled'])
         self.assertEqual(config['shared_key'], 'x' * 48)
         self.assertTrue(config['frontend_enabled'])
         self.assertEqual(config['frontend_embed_session_minutes'], 120)
-        self.assertEqual(
-            config['frontend_embed_allowed_origins'],
-            'http://192.168.0.51:8080, https://peis.example.com',
-        )
+        self.assertEqual(config['frontend_allowed_origins'], 'http://192.168.0.39:8080')
+        self.assertEqual(config['frontend_embed_allowed_origins'], 'http://192.168.0.39:8080')
         self.assertEqual(config['frame_ancestors'], config['frontend_embed_allowed_origins'])
+        dialog.close()
+
+    def test_https_address_keeps_its_protocol(self):
+        _, dialog = self.create_dialog()
+        dialog.frontend_address_edit.setText('https://192.168.0.39:8443')
+
+        config = dialog._build_integration_config()
+
+        self.assertEqual(config['frontend_allowed_origins'], 'https://192.168.0.39:8443')
+        self.assertEqual(config['frontend_embed_allowed_origins'], 'https://192.168.0.39:8443')
+        self.assertEqual(config['frame_ancestors'], 'https://192.168.0.39:8443')
         dialog.close()
 
     def test_save_rejects_enabled_embed_without_a_valid_frontend_origin(self):
         manager, dialog = self.create_dialog()
-        dialog.frontend_embed_origins_edit.setText(
+        dialog.frontend_address_edit.setText(
             'http://192.168.0.51:8080/#/director/reportStatistics'
         )
         with patch('widgets.config_dialog.QMessageBox.warning') as warning:

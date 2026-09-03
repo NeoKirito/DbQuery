@@ -49,7 +49,7 @@ Web 端支持在 iframe 中作为宿主系统内容区的一部分使用。正�
 
 建议 iframe 容器由宿主系统提供稳定的内容区高度。DbQuery 嵌入模式会使用 iframe 的完整可用高度，并仅使结果区域产生必要的纵向滚动；宽表仍可在结果区域内横向滚动。
 
-嵌入页面与独立访问使用同一个登录页和服务端会话。嵌入页未登录时会显示登录界面；宿主系统不能仅凭 iframe 地址绕过认证。若宿主和 DbQuery 不属于同一站点且浏览器禁止第三方 Cookie，请由部署人员按浏览器安全策略评估，或后续接入企业 SSO，不应在 URL 中传递账号密码。
+普通 iframe 地址与独立访问使用同一个登录页和 Cookie 会话，未登录时会显示登录界面。Frontend Embed V1 会先验证宿主来源和账号，再签发随机、限时的服务端 iframe 会话，因此跨站嵌入不依赖第三方 Cookie；账号密码不会进入 URL。
 
 对于已登录宿主系统的无感 iframe 集成，DBQuery 提供受 HMAC 签名保护的一次性短期票据流程：宿主**后端**验证当前用户后申请票据，浏览器通过 iframe `POST` 消费票据而不显示 DBQuery 登录页。完整配置、签名原文、接口和 .NET 示例见 [HOST_INTEGRATION.md](HOST_INTEGRATION.md)。该流程只建立身份，**不会绕过**下面的 `web_enabled` 表单授权。
 
@@ -62,12 +62,12 @@ PEIS frontend
   → 有账号密码时直接 POST /api/integration/frontend-login
   → 未传账号密码时 GET /api/integration/session 复用已有会话
   → qx_czyxx 参数化验证
-  → DBQuery HttpOnly Session
-  → iframe.src = /dbquery/
+  → DBQuery 服务端签发限时 Embed Session
+  → iframe.src = /embed-session/{随机令牌}/
   → 完整 DBQuery Web UI
 ```
 
-生产部署先在 DBQuery EXE 的“数据库连接配置”中找到“前端无感登录”，勾选启用并填写前端页面的 `location.origin`（例如 `http://192.168.0.51:8080`）。不能填写页面路径、`#` 或 `*`；多个地址用英文逗号分隔。保存后的等效 `config.ini` 配置如下。不要在源码、发布包或浏览器配置中保存任何真实账号或密码。
+生产部署先在 DBQuery EXE 的“数据库连接配置”中找到“前端无感登录”，勾选启用并填写一个前端 `IP:端口`（例如 `192.168.0.39:8080`）。程序会自动补全 HTTP 协议，并统一更新所有前端来源白名单；不能填写页面路径或 `#` 后面的路由。HTTPS 部署请填写完整的 `https://IP:端口`。保存后的等效 `config.ini` 配置如下。不要在源码、发布包或浏览器配置中保存任何真实账号或密码。
 
 ```ini
 [integration]
@@ -81,28 +81,28 @@ frontend_embed_session_minutes = 60
 frame_ancestors = https://peis.example.com
 ```
 
-推荐以同站点反向代理部署：PEIS 位于 `https://peis.example.com/`，DBQuery 位于 `https://peis.example.com/dbquery/`，由 `/dbquery/` 代理到 `http://127.0.0.1:8094/`。这样可避免第三方 Cookie、跨站 iframe、CORS 和 SameSite 的额外复杂度。若代理会设置 `X-Forwarded-Prefix`，需在 DBQuery 服务进程环境中显式设置 `DBQUERY_TRUST_PROXY_PREFIX=true`；若 HTTPS 在反向代理终止，可设置 `DBQUERY_SESSION_COOKIE_SECURE=true`。
+Frontend Embed V1 的跨站 iframe 会话由 DBQuery Web 自己维护，不依赖第三方 Cookie。PEIS 和 DBQuery 使用不同 IP 时无需配置反向代理；在 PEIS 中直接把 `apiBase` 设置为 DBQuery 地址即可。同站点 `/dbquery` 反向代理仍受支持，但只是可选部署方式。
 
 #### 原生 JavaScript
 
 在 PEIS 的 HTML 页面中加载 SDK：
 
 ```html
-<script src="/dbquery/static/js/dbquery-embed.js"></script>
+<script src="http://192.168.0.88:8094/static/js/dbquery-embed.js"></script>
 <div id="dbquery" style="height: 720px"></div>
 <script>
 DBQueryEmbed.mount({
   el: '#dbquery',
   username: currentUser.username,
   password: currentUser.password,
-  apiBase: '/dbquery',
+  apiBase: 'http://192.168.0.88:8094',
   onReady: function () {},
   onError: function (error) { console.error(error.code); }
 });
 </script>
 ```
 
-若 PEIS 使用 Vue 2 但不通过 npm 打包 SDK，可在 `public/index.html` 中加入 `<script src="/dbquery/static/js/dbquery-embed.js"></script>`，再通过 `window.DBQueryEmbed` 调用。DBQuery 位于独立地址时也可以使用绝对 SDK URL；生产环境仍优先推荐同站点 `/dbquery`。
+若 PEIS 使用 Vue 2 但不通过 npm 打包 SDK，可在 `public/index.html` 中直接加载 DBQuery 发布包提供的绝对 SDK URL，再通过 `window.DBQueryEmbed` 调用。PEIS 只需保持 SDK 与 DBQuery 服务版本一致。
 
 #### Vue 2 页面用法
 
@@ -123,7 +123,7 @@ export default {
     this.mountDbQuery()
   },
   beforeDestroy() {
-    // 只销毁 iframe DOM；不要自动 logout，Session 可供下次页面进入复用。
+    // 页面切换时只销毁 iframe；PEIS 真正退出时再调用 DBQueryEmbed.logout()。
     if (this.$refs.dbqueryContainer) this.$refs.dbqueryContainer.innerHTML = ''
   },
   methods: {
@@ -133,7 +133,7 @@ export default {
           el: this.$refs.dbqueryContainer,
           username: this.$store.state.user.username,
           password: this.$store.state.user.password,
-          apiBase: '/dbquery',
+          apiBase: 'http://192.168.0.88:8094',
           onReady: () => { this.dbqueryMounted = true },
           onError: error => { console.error('DBQuery embed error:', error.code) }
         })
@@ -162,7 +162,7 @@ export default {
   props: {
     username: { type: String, required: true },
     password: { type: String, required: true },
-    apiBase: { type: String, default: '/dbquery' }
+    apiBase: { type: String, default: 'http://192.168.0.88:8094' }
   },
   mounted() { this.mount() },
   beforeDestroy() {
@@ -203,16 +203,18 @@ PEIS 自己退出系统时可显式调用 DBQuery 登出，但失败不能阻断
 
 ```javascript
 try {
-  if (window.DBQueryEmbed) await window.DBQueryEmbed.logout({ apiBase: '/dbquery' })
+  if (window.DBQueryEmbed) {
+    await window.DBQueryEmbed.logout({ apiBase: 'http://192.168.0.88:8094' })
+  }
 } catch (error) {
   console.warn('DBQuery logout failed')
 }
 this.logoutPeis()
 ```
 
-`mount()` 返回 Promise，并以 `AUTH_FAILED`、`ORIGIN_DENIED`、`NETWORK_ERROR`、`SESSION_FAILED` 和 `LOAD_FAILED` 表示错误。iframe 会固定指向 DBQuery Web 首页，样式为 `width: 100%`、`height: 100%`、`border: 0`、`display: block`，高度由宿主 container 决定。
+`mount()` 返回 Promise，并以 `AUTH_FAILED`、`ORIGIN_DENIED`、`NETWORK_ERROR`、`SESSION_FAILED` 和 `LOAD_FAILED` 表示错误。iframe 会进入带限时会话前缀的 DBQuery Web 首页，样式为 `width: 100%`、`height: 100%`、`border: 0`、`display: block`，高度由宿主 container 决定。
 
-> 密码仅在建立 Session 的首次 HTTPS `POST /api/integration/frontend-login` 中使用。它不会进入 iframe URL、DOM attribute、Cookie、localStorage 或 sessionStorage。认证完成后 SDK 不再保存或主动持有 password 引用。DBQuery SDK 不会扫描 PEIS localStorage；如 PEIS 自己使用 localStorage，应由 PEIS 显式读取后作为 `username`、`password` 参数传入。Origin allowlist 只是浏览器接入限制，不构成宿主身份认证。
+> 密码仅在首次 `POST /api/integration/frontend-login` 中使用，生产环境建议使用 HTTPS。它不会进入 iframe URL、DOM attribute、Cookie、localStorage 或 sessionStorage。认证完成后 SDK 不再保存或主动持有 password 引用。DBQuery SDK 不会扫描 PEIS localStorage；如 PEIS 自己使用 localStorage，应由 PEIS 显式读取后作为 `username`、`password` 参数传入。Origin allowlist 只是浏览器接入限制，不构成宿主身份认证。
 
 ## 登录与 Web 表单权限
 

@@ -6,29 +6,29 @@
 
 Frontend Embed V1 只做一件事：PEIS 显式传入当前账号和密码，DBQuery 独立验证后建立自己的 Session，再将**完整 DBQuery Web 首页**放入 iframe。用户在 DBQuery 内自行选择表单、输入条件、查询、切换和导出；PEIS 不传业务参数、查询条件、表单 ID 或 SQL。
 
-DBQuery 端只需打开“数据库连接配置 → 前端无感登录”，勾选“启用前端无感登录”，并在“前端地址”中填写 PEIS 页面 `location.origin` 的值，例如 `http://192.168.0.51:8080`。不要填写 `#/director/reportStatistics` 等页面路径；多个前端地址用英文逗号分隔。
+DBQuery 端只需打开“数据库连接配置 → 前端无感登录”，勾选“启用前端无感登录”，并在“前端 IP:端口”中填写 PEIS 地址，例如 `192.168.0.39:8080`。程序会自动补全为 `http://192.168.0.39:8080`，并同步前端接口白名单、Embed CORS 白名单和 iframe CSP 白名单。不要填写 `#/director/reportStatistics` 等页面路径；HTTPS 部署请填写完整的 `https://IP:端口`。
 
 ```html
-<script src="/dbquery/static/js/dbquery-embed.js"></script>
+<script src="http://192.168.0.88:8094/static/js/dbquery-embed.js"></script>
 <div id="dbquery" style="height: 100%"></div>
 <script>
 DBQueryEmbed.mount({
   el: '#dbquery',
   username: currentUser.username,
   password: currentUser.password,
-  apiBase: '/dbquery'
+  apiBase: 'http://192.168.0.88:8094'
 })
 </script>
 ```
 
-认证成功后的 iframe 地址为 `/dbquery/`，而不是某个指定表单地址。传入账号密码时 SDK 会直接调用 `/api/integration/frontend-login`，不会先调用可能因同源 GET 缺少 `Origin` 而返回 403 的 Session 探测接口；只有未传账号密码时才调用 `/api/integration/session` 复用已有会话。`DBQueryEmbed.logout({ apiBase: '/dbquery' })` 只退出 DBQuery，不会修改 PEIS 的 localStorage、token 或用户状态。
+认证成功后，DBQuery 返回一个随机、限时、仅保存在服务内存中的 iframe 会话地址。完整工作台的页面、静态资源、查询和导出接口都通过这个会话前缀访问，不依赖第三方 Cookie，因此 PEIS 和 DBQuery 使用不同 IP 时也可以直接嵌入。账号和密码不会进入 iframe 地址。`DBQueryEmbed.logout({ apiBase: 'http://192.168.0.88:8094' })` 会立即撤销该嵌入会话，但不会修改 PEIS 的用户状态。
 
 ### Vue 2 用法
 
 在 PEIS 的 `public/index.html` 中加入：
 
 ```html
-<script src="/dbquery/static/js/dbquery-embed.js"></script>
+<script src="http://192.168.0.88:8094/static/js/dbquery-embed.js"></script>
 ```
 
 页面组件可直接使用：
@@ -42,7 +42,7 @@ export default {
       el: this.$refs.container,
       username: this.$store.state.user.username,
       password: this.$store.state.user.password,
-      apiBase: '/dbquery',
+      apiBase: 'http://192.168.0.88:8094',
       onError: error => this.$message.error('查询工具加载失败')
     })
   },
@@ -59,25 +59,9 @@ DBQuery SDK 不扫描 PEIS localStorage。如果 PEIS 自己保存凭据，应�
 
 ### 当前 HTTP 局域网部署
 
-PEIS 与 DBQuery 使用不同 IP 时，现代浏览器不会把 DBQuery 的 `SameSite` Session Cookie 带入跨站 iframe。必须由 PEIS 服务提供同源 `/dbquery` 代理，并将 `chiefWorkstationUrl` 配置为 `/dbquery`。Vue CLI 开发服务器可使用：
+PEIS 与 DBQuery 使用不同 IP 时，直接把 `apiBase` 设置为 DBQuery 地址即可，例如 `http://192.168.0.88:8094`。DBQuery Web 会完成精确 Origin 校验、CORS 响应、账号验证、跨站 iframe 会话签发和会话失效处理，不需要在 PEIS 服务中配置 `/dbquery` 代理。
 
-```js
-// vue.config.js
-devServer: {
-  proxy: {
-    '/dbquery': {
-      target: 'http://192.168.0.88:8094',
-      changeOrigin: true,
-      pathRewrite: { '^/dbquery': '' },
-      onProxyReq(proxyReq) {
-        proxyReq.setHeader('X-Forwarded-Prefix', '/dbquery')
-      }
-    }
-  }
-}
-```
-
-DBQuery 必须以 `DBQUERY_TRUST_PROXY_PREFIX=true` 启动；随包的 `start_web.bat` 已设置该变量。代理修正后应访问 `/dbquery/api/integration/session`，不能再将 `/dbquery` 指向其他业务服务。
+PEIS 只需使用发布包中同一版本的 `dbquery-embed.js`。嵌入会话为随机 256 位令牌，按界面配置的分钟数自动过期，只保存在 DBQuery 当前服务进程内；服务重启或调用 `DBQueryEmbed.logout()` 后立即失效。页面设置 `no-referrer`，避免令牌通过 Referer 发送到其他站点。
 
 ## 历史兼容模式的适用范围
 

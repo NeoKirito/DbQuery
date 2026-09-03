@@ -70,7 +70,11 @@ async function testLoginThenHome() {
   const calls = [];
   const sdk = loadSdk(function (url, options) {
     calls.push({url: url, options: options});
-    if (calls.length === 1) return Promise.resolve(response({authenticated: true}));
+    if (calls.length === 1) return Promise.resolve(response({
+      authenticated: true,
+      embed_path: '/embed-session/embed-token/?embed=1&hide_header=1&sidebar=0',
+      embed_session: 'embed-token'
+    }));
     throw new Error('Unexpected request');
   });
   const container = new Element('div');
@@ -84,7 +88,10 @@ async function testLoginThenHome() {
   assert.strictEqual(calls[0].url, '/dbquery/api/integration/frontend-login');
   assert.strictEqual(calls[0].options.method, 'POST');
   assert.strictEqual(calls[0].options.credentials, 'include');
-  assert.strictEqual(result.iframe.src, '/dbquery/');
+  assert.strictEqual(
+    result.iframe.src,
+    '/dbquery/embed-session/embed-token/?embed=1&hide_header=1&sidebar=0'
+  );
   assert.strictEqual(result.iframe.style.width, '100%');
   assert.strictEqual(result.iframe.style.height, '100%');
   assert.strictEqual(result.iframe.style.border, '0');
@@ -116,16 +123,21 @@ async function testDefaultBaseAndLogout() {
   const calls = [];
   const sdk = loadSdk(function (url, options) {
     calls.push({url: url, options: options});
-    if (url === '/api/integration/frontend-login') return Promise.resolve(response({authenticated: true}));
+    if (url === '/api/integration/frontend-login') return Promise.resolve(response({
+      authenticated: true,
+      embed_path: '/embed-session/token-2/',
+      embed_session: 'token-2'
+    }));
     if (url === '/api/integration/logout') return Promise.resolve(response({success: true}));
     throw new Error('Unexpected request: ' + url);
   });
   const container = new Element('div');
   const result = await sdk.mount({el: container, username: 'tester', password: 'secret', apiBase: '/'});
-  assert.strictEqual(result.iframe.src, '/');
+  assert.strictEqual(result.iframe.src, '/embed-session/token-2/');
   await sdk.logout();
   assert.strictEqual(calls[1].url, '/api/integration/logout');
   assert.strictEqual(calls[1].options.method, 'POST');
+  assert.deepStrictEqual(JSON.parse(calls[1].options.body), {embed_session: 'token-2'});
 }
 
 async function testMissingCredentialsUsesSessionProbe() {

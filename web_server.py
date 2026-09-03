@@ -76,9 +76,6 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, 'templates'),
     static_folder=os.path.join(BASE_DIR, 'static')
 )
-# 只有部署人员显式信任反向代理前缀时才处理 X-Forwarded-Prefix，避免直连请求伪造前缀。
-if _env_flag('DBQUERY_TRUST_PROXY_PREFIX', False):
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
 app.json_provider_class = DBQueryJSONProvider
 app.json = DBQueryJSONProvider(app)
 # 未配置显式环境变量时，每次服务启动生成新的高熵密钥；服务重启后要求重新登录。
@@ -101,7 +98,9 @@ _LOGIN_WINDOW_SECONDS = 300
 _INTEGRATION_LOCK = threading.Lock()
 _INTEGRATION_NONCES = {}
 _INTEGRATION_TICKETS = {}
+_EMBED_SESSIONS = {}
 _INTEGRATION_MAX_BODY_LENGTH = 8192
+_EMBED_SESSION_PREFIX = '/embed-session/'
 
 
 def _client_key():
@@ -151,6 +150,108 @@ def _purge_integration_state(now=None):
             expires_at = item if isinstance(item, (int, float)) else item.get('expires_at', 0)
             if expires_at <= now:
                 bucket.pop(key, None)
+
+
+def _purge_embed_sessions(now=None):
+    now = time.time() if now is None else now
+    for token, state in list(_EMBED_SESSIONS.items()):
+        if state.get('expires_at', 0) <= now:
+            _EMBED_SESSIONS.pop(token, None)
+
+
+def _issue_embed_session(username, lifetime_minutes):
+    """签发仅用于跨站 iframe 的服务端会话，不依赖浏览器 Cookie。"""
+    token = secrets.token_urlsafe(32)
+    lifetime_seconds = max(60, min(int(lifetime_minutes or 60), 1440) * 60)
+    user_agent_hash = hashlib.sha256(
+        request.headers.get('User-Agent', '').encode('utf-8')
+    ).hexdigest()
+    with _INTEGRATION_LOCK:
+        _purge_embed_sessions()
+        # 防止长期运行时被大量有效登录无限占用内存。
+        if len(_EMBED_SESSIONS) >= 2048:
+            oldest = min(
+                _EMBED_SESSIONS, key=lambda item: _EMBED_SESSIONS[item].get('expires_at', 0)
+            )
+            _EMBED_SESSIONS.pop(oldest, None)
+        _EMBED_SESSIONS[token] = {
+            'username': username,
+            'csrf_token': secrets.token_urlsafe(24),
+            'expires_at': time.time() + lifetime_seconds,
+            'client_addr': request.remote_addr or '',
+            'user_agent_hash': user_agent_hash,
+        }
+    return token
+
+
+def _get_embed_session(token):
+    with _INTEGRATION_LOCK:
+        _purge_embed_sessions()
+        return _EMBED_SESSIONS.get(token)
+
+
+def _revoke_embed_session(token):
+    if not token:
+        return
+    with _INTEGRATION_LOCK:
+        _EMBED_SESSIONS.pop(token, None)
+
+
+class EmbedSessionMiddleware(object):
+    """把带随机会话前缀的 URL 映射回应用路由，绕开第三方 Cookie 限制。"""
+
+    def __init__(self, application):
+        self.application = application
+
+    @staticmethod
+    def _invalid(start_response):
+        body = '嵌入会话已失效，请从业务系统重新进入。'.encode('utf-8')
+        start_response('401 Unauthorized', [
+            ('Content-Type', 'text/plain; charset=utf-8'),
+            ('Content-Length', str(len(body))),
+            ('Cache-Control', 'no-store, max-age=0'),
+            ('Content-Security-Policy', "frame-ancestors 'none'"),
+            ('Referrer-Policy', 'no-referrer'),
+            ('X-Content-Type-Options', 'nosniff'),
+        ])
+        return [body]
+
+    def __call__(self, environ, start_response):
+        path = environ.get('PATH_INFO', '') or '/'
+        if not path.startswith(_EMBED_SESSION_PREFIX):
+            return self.application(environ, start_response)
+
+        token_and_path = path[len(_EMBED_SESSION_PREFIX):]
+        token, separator, remaining = token_and_path.partition('/')
+        if (not token or len(token) > 128 or
+                any(char not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'
+                    for char in token)):
+            return self._invalid(start_response)
+        state = _get_embed_session(token)
+        if not state:
+            return self._invalid(start_response)
+        request_user_agent_hash = hashlib.sha256(
+            (environ.get('HTTP_USER_AGENT', '') or '').encode('utf-8')
+        ).hexdigest()
+        if (state.get('client_addr') != (environ.get('REMOTE_ADDR', '') or '') or
+                not hmac.compare_digest(state.get('user_agent_hash', ''),
+                                        request_user_agent_hash)):
+            return self._invalid(start_response)
+
+        embed_prefix = _EMBED_SESSION_PREFIX.rstrip('/') + '/' + token
+        existing_script_name = (environ.get('SCRIPT_NAME', '') or '').rstrip('/')
+        environ['SCRIPT_NAME'] = existing_script_name + embed_prefix
+        environ['PATH_INFO'] = '/' + remaining if separator else '/'
+        environ['DBQUERY_EMBED_TOKEN'] = token
+        environ['DBQUERY_EMBED_USER'] = state['username']
+        environ['DBQUERY_EMBED_CSRF'] = state['csrf_token']
+        return self.application(environ, start_response)
+
+
+# ProxyFix 在外层先处理部署前缀，Embed 中间件再叠加跨站会话前缀。
+app.wsgi_app = EmbedSessionMiddleware(app.wsgi_app)
+if _env_flag('DBQUERY_TRUST_PROXY_PREFIX', False):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_prefix=1)
 
 
 def _integration_error(message, status=403, error_type='integration_authentication_failed'):
@@ -286,6 +387,8 @@ def _establish_authenticated_session(username, auth_source, lifetime_minutes=Non
 
 
 def _session_is_authenticated():
+    if request.environ.get('DBQUERY_EMBED_USER'):
+        return True
     if not session.get('auth_user'):
         return False
     expires_at = session.get('auth_expires_at')
@@ -298,6 +401,10 @@ def _session_is_authenticated():
             session.clear()
             return False
     return True
+
+
+def _current_auth_user():
+    return request.environ.get('DBQUERY_EMBED_USER') or session.get('auth_user', '')
 
 
 def _consume_integration_ticket(ticket):
@@ -332,7 +439,9 @@ def apply_security_headers(response):
         response.headers['Cache-Control'] = 'no-store, max-age=0'
         response.headers['Pragma'] = 'no-cache'
     response.headers['X-Content-Type-Options'] = 'nosniff'
-    response.headers['Referrer-Policy'] = 'same-origin'
+    response.headers['Referrer-Policy'] = (
+        'no-referrer' if request.environ.get('DBQUERY_EMBED_TOKEN') else 'same-origin'
+    )
     # 以 CSP 为准控制 iframe 祖先；移除可能与 CSP 冲突的旧 X-Frame-Options。
     try:
         frame_ancestors = DBManager().get_integration_config().get('frame_ancestors', [])
@@ -347,16 +456,17 @@ def apply_security_headers(response):
 
 def get_embed_context():
     """统一解析页面级嵌入状态，供所有页面模板复用。"""
+    token_embed = bool(request.environ.get('DBQUERY_EMBED_TOKEN'))
     hide_header = request.args.get('hide_header') == '1'
-    embed = request.args.get('embed') == '1' or hide_header
+    embed = token_embed or request.args.get('embed') == '1' or hide_header
     sidebar_arg = request.args.get('sidebar')
     # 嵌入宿主通常已有自己的导航；仅在显式 sidebar=1 时保留 DbQuery 侧栏。
     sidebar_hidden = sidebar_arg == '0' or (embed and sidebar_arg != '1')
     return {
         'embed_mode': embed,
-        'hide_header': hide_header or embed,
+        'hide_header': token_embed or hide_header or embed,
         'sidebar_hidden': sidebar_hidden,
-        'current_user': session.get('auth_user', ''),
+        'current_user': _current_auth_user(),
         'page_name': 'app',
     }
 
@@ -414,6 +524,9 @@ def form_options(form, db_manager):
 
 
 def _csrf_token():
+    embed_token = request.environ.get('DBQUERY_EMBED_CSRF')
+    if embed_token:
+        return embed_token
     token = session.get('csrf_token')
     if not token:
         token = secrets.token_urlsafe(24)
@@ -503,12 +616,21 @@ def frontend_embed_login():
         return _frontend_embed_error('账号或密码错误。', 401, 'AUTH_FAILED', origin)
 
     _clear_login_failures()
+    embed_token = _issue_embed_session(
+        username, cfg.get('frontend_embed_session_minutes', 60)
+    )
+    embed_path = '{}{}/?embed=1&hide_header=1&sidebar=0'.format(
+        _EMBED_SESSION_PREFIX, embed_token
+    )
+    # 同源部署继续获得普通 Cookie Session；跨站 iframe 使用 embed_path 中的服务端会话。
     _establish_authenticated_session(
         username, 'frontend_embed_v1', cfg.get('frontend_embed_session_minutes', 60)
     )
     return _frontend_embed_cors_response(jsonify({
         'success': True,
         'authenticated': True,
+        'embed_path': embed_path,
+        'embed_session': embed_token,
         'user': {'username': username, 'display_name': username},
     }), origin)
 
@@ -521,6 +643,10 @@ def frontend_embed_logout():
         return failure
     if request.method == 'OPTIONS':
         return _frontend_embed_cors_response(('', 204), origin)
+    data = request.get_json(silent=True) or {}
+    embed_token = str(data.get('embed_session') or '')
+    if len(embed_token) <= 128:
+        _revoke_embed_session(embed_token)
     session.clear()
     return _frontend_embed_cors_response(jsonify({'success': True, 'authenticated': False}), origin)
 
