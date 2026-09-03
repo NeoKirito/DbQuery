@@ -57,6 +57,28 @@ export default {
 
 DBQuery SDK 不扫描 PEIS localStorage。如果 PEIS 自己保存凭据，应由 PEIS 显式读取后作为 `username` 和 `password` 传入。密码只用于首次 HTTPS POST；认证完成后 SDK 不再保存或主动持有 password 引用，且不会将其写入 URL、iframe `src`、DOM 或浏览器存储。
 
+### 当前 HTTP 局域网部署
+
+PEIS 与 DBQuery 使用不同 IP 时，现代浏览器不会把 DBQuery 的 `SameSite` Session Cookie 带入跨站 iframe。必须由 PEIS 服务提供同源 `/dbquery` 代理，并将 `chiefWorkstationUrl` 配置为 `/dbquery`。Vue CLI 开发服务器可使用：
+
+```js
+// vue.config.js
+devServer: {
+  proxy: {
+    '/dbquery': {
+      target: 'http://192.168.0.88:8094',
+      changeOrigin: true,
+      pathRewrite: { '^/dbquery': '' },
+      onProxyReq(proxyReq) {
+        proxyReq.setHeader('X-Forwarded-Prefix', '/dbquery')
+      }
+    }
+  }
+}
+```
+
+DBQuery 必须以 `DBQUERY_TRUST_PROXY_PREFIX=true` 启动；随包的 `start_web.bat` 已设置该变量。代理修正后应访问 `/dbquery/api/integration/session`，不能再将 `/dbquery` 指向其他业务服务。
+
 ## 历史兼容模式的适用范围
 
 此模式适用于宿主系统**只有浏览器前端配置、没有可保存共享密钥的宿主后端**的情况。宿主页面在自己的用户完成登录后，以该用户本次登录取得的 `czybm` 与密码向 DBQuery 交换一个**一次性、短时有效**的 ticket；随后由隐藏表单将 ticket `POST` 到 iframe，DBQuery 创建会话并直接显示目标表单。

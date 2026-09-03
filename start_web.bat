@@ -7,6 +7,8 @@ cd /d "%~dp0"
 set "WEB_PORT=8094"
 set "EXE_PATH=%~dp0dist_final\DBQuery.exe"
 set "PORT_RULE_NAME=DBQuery_Web_%WEB_PORT%"
+:: Allow a trusted reverse proxy to expose DBQuery below /dbquery.
+set "DBQUERY_TRUST_PROXY_PREFIX=true"
 
 :: Firewall rules require administrator privileges. Relaunch this script as admin.
 net session >nul 2>&1
