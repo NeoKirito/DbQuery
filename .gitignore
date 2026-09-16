@@ -16,6 +16,9 @@ obj/
 .vs/
 .vscode/
 
+# Archives
+*.zip
+
 # Runtime logs
 *.log
 
