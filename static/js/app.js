@@ -381,6 +381,30 @@ var TabManager = {
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
+   报表拼音首字母检索辅助函数（纯前端无依赖，基于 zh-Hans-CN localeCompare）
+   ════════════════════════════════════════════════════════════════════════════ */
+function getPinyinFirstLetter(str) {
+    if (!str) return '';
+    var dict = {'a': '吖', 'b': '八', 'c': '嚓', 'd': '咑', 'e': '妸', 'f': '发', 'g': '旮', 'h': '哈', 'j': '丌', 'k': '咔', 'l': '垃', 'm': '妈', 'n': '拿', 'o': '噢', 'p': '妑', 'q': '七', 'r': '呥', 's': '仨', 't': '他', 'w': '屲', 'x': '夕', 'y': '丫', 'z': '帀'};
+    var res = '';
+    for (var i = 0; i < str.length; i++) {
+        var ch = str[i];
+        if (/[a-zA-Z0-9]/.test(ch)) { res += ch.toLowerCase(); continue; }
+        if (!/[\u4e00-\u9fa5]/.test(ch)) continue;
+        var found = '';
+        var letters = ['z','y','x','w','t','s','r','q','p','o','n','m','l','k','j','h','g','f','e','d','c','b','a'];
+        for (var j = 0; j < letters.length; j++) {
+            if (ch.localeCompare(dict[letters[j]], 'zh-Hans-CN') >= 0) {
+                found = letters[j];
+                break;
+            }
+        }
+        res += (found || '');
+    }
+    return res;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
    DrawerManager：快捷报表抽屉控制器（平滑滑出/收起，搜索，分组，选报表自动缩小收起）
    ════════════════════════════════════════════════════════════════════════════ */
 var DrawerManager = {
@@ -493,7 +517,8 @@ var DrawerManager = {
                 var form = forms[i];
                 var fp = form.file_path || '';
                 var isHasDesc = Boolean(form.description);
-                html += '<a class="drawer-item" href="javascript:void(0);" data-file-path="' + esc(fp) + '" data-title="' + esc(form.title.toLowerCase()) + '" title="' + esc(form.title) + '">';
+                var pinyinFirst = getPinyinFirstLetter(form.title || '');
+                html += '<a class="drawer-item" href="javascript:void(0);" data-file-path="' + esc(fp) + '" data-title="' + esc(form.title.toLowerCase()) + '" data-pinyin="' + esc(pinyinFirst) + '" title="' + esc(form.title) + '">';
                 html += '<svg class="icon drawer-item-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
                 html += '<div class="drawer-item-info">';
                 html += '<span class="drawer-item-title">' + esc(form.title) + '</span>';
@@ -554,8 +579,9 @@ var DrawerManager = {
             $grp.find('.drawer-item').each(function () {
                 var $item = $(this);
                 var title = String($item.data('title') || '');
+                var pinyin = String($item.data('pinyin') || '');
                 var desc = String($item.find('.drawer-item-desc').text() || '').toLowerCase();
-                var matched = !text || title.indexOf(text) >= 0 || desc.indexOf(text) >= 0;
+                var matched = !text || title.indexOf(text) >= 0 || desc.indexOf(text) >= 0 || (pinyin && pinyin.indexOf(text) >= 0);
                 $item.toggle(matched);
                 if (matched) grpMatches++;
             });
@@ -1003,7 +1029,12 @@ function filterFormTree(value, $tree) {
     var text = (value || '').toLowerCase();
     $tree.find('.nav-item-link').each(function () {
         var title = $(this).data('title') || '';
-        $(this).toggle(!text || title.indexOf(text) >= 0);
+        var pinyin = $(this).data('pinyin');
+        if (pinyin === undefined) {
+            pinyin = getPinyinFirstLetter(title);
+            $(this).data('pinyin', pinyin);
+        }
+        $(this).toggle(!text || title.indexOf(text) >= 0 || (pinyin && pinyin.indexOf(text) >= 0));
     });
     $tree.find('.nav-group').each(function () {
         var $group = $(this);
