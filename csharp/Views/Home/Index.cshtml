@@ -1,0 +1,75 @@
+@using DbQuery.Models
+@{
+    ViewData["Title"] = "综合查询平台";
+    ViewBag.PageName = "index";
+    var formsData = ViewBag.FormsData as Dictionary<string, List<QryForm>> ?? new Dictionary<string, List<QryForm>>();
+    var currentUser = ViewBag.CurrentUser as string ?? "";
+    var embedMode = ViewBag.EmbedMode == true;
+}
+
+<div class="app-layout">
+    @if (!embedMode)
+    {
+        <header class="app-header">
+            <div class="header-brand">
+                <a class="brand-link" href="/">综合查询</a>
+            </div>
+            <div class="header-actions">
+                <span class="user-info">当前操作员：<strong>@currentUser</strong></span>
+                <form method="post" action="/logout" style="display: inline;">
+                    <button type="submit" class="btn btn-sm btn-outline-light">退出</button>
+                </form>
+            </div>
+        </header>
+    }
+
+    <div class="app-container">
+        @if (ViewBag.SidebarHidden != true)
+        {
+            <aside class="app-sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <h2 class="sidebar-title">查询项目</h2>
+                    <input type="text" id="search-box" class="form-control form-control-sm" placeholder="搜索查询...">
+                </div>
+                <nav class="sidebar-nav" id="sidebar-nav">
+                    @foreach (var group in formsData)
+                    {
+                        <div class="nav-group">
+                            <div class="nav-group-title">@group.Key</div>
+                            <ul class="nav-group-list">
+                                @foreach (var item in group.Value)
+                                {
+                                    <li class="nav-item">
+                                        <a href="/query/@item.FilePath" class="nav-item-link" title="@item.Description">
+                                            @item.Title
+                                        </a>
+                                    </li>
+                                }
+                            </ul>
+                        </div>
+                    }
+                </nav>
+            </aside>
+        }
+
+        <section class="app-content content-main">
+            <div class="welcome-box">
+                <h1 class="welcome-title">欢迎使用综合查询系统</h1>
+                <p class="welcome-desc">请在左侧导航栏中选择一个查询项目，或从下方快速访问常用表单：</p>
+                <div class="welcome-cards">
+                    @foreach (var group in formsData)
+                    {
+                        @foreach (var item in group.Value)
+                        {
+                            <a href="/query/@item.FilePath" class="welcome-card">
+                                <div class="card-group-tag">@item.Group</div>
+                                <h3 class="card-title">@item.Title</h3>
+                                <p class="card-desc">@(string.IsNullOrEmpty(item.Description) ? "点击进入查询界面并输入参数执行查询。" : item.Description)</p>
+                            </a>
+                        }
+                    }
+                </div>
+            </div>
+        </section>
+    </div>
+</div>

@@ -1,0 +1,6 @@
+{
+  "name": "DbQuery",
+  "description": "数据库综合查询工具 Web 版，支持多项目查询、参数配置与 Excel 导出",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "dbquery",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "build": "node --check server.js"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "ejs": "^3.1.10",
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1"
+  }
+}

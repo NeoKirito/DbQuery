@@ -2,6 +2,7 @@
 title = 订单查询
 group = 示例
 description = 按日期范围、客户名称、状态查询订单列表
+web_enabled = true
 
 [params]
 start_date    = 开始日期 | date

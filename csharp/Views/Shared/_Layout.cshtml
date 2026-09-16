@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>@(ViewData["Title"] ?? "综合查询")</title>
+    <link href="/static/vendor/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/vendor/dataTables.bootstrap5.min.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+    @RenderSection("Styles", required: false)
+</head>
+<body class="@(ViewBag.EmbedMode == true ? "embed-mode" : "standalone-mode")@(ViewBag.SidebarHidden == true ? " sidebar-hidden-mode" : "")"
+      data-page="@(ViewBag.PageName ?? "app")"
+      data-embed-mode="@(ViewBag.EmbedMode == true ? "1" : "0")"
+      data-sidebar-hidden="@(ViewBag.SidebarHidden == true ? "1" : "0")">
+    <main class="app-body" aria-label="综合查询内容区">
+        @RenderBody()
+    </main>
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+    @if ((string?)ViewBag.PageName != "login")
+    {
+        <script>
+            window.DBQUERY = window.DBQUERY || {};
+            window.DBQUERY.apiBase = "";
+        </script>
+        <script src="/static/vendor/jquery.min.js"></script>
+        <script src="/static/vendor/bootstrap.bundle.min.js"></script>
+        <script src="/static/vendor/jquery.dataTables.min.js"></script>
+        <script src="/static/js/app.js"></script>
+    }
+    @RenderSection("Scripts", required: false)
+</body>
+</html>

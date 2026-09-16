@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>DbQuery</RootNamespace>
+    <AssemblyName>DbQuery</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- SQL Server 数据库访问驱动 -->
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.0" />
+    <!-- Excel 导出支持（多工作表、格式化、表头美化） -->
+    <PackageReference Include="ClosedXML" Version="0.102.2" />
+  </ItemGroup>
+
+</Project>

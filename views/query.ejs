@@ -1,0 +1,160 @@
+<%- include('partials/header', { title: form.title + ' - 综合查询' }) %>
+
+<div class="app-layout<%= sidebar_hidden ? ' no-sidebar' : '' %>">
+    <% if (!sidebar_hidden) { %>
+    <aside class="app-sidebar" id="sidebar" aria-label="查询项目">
+        <div class="sidebar-heading">
+            <div class="sidebar-title">
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                <span class="sidebar-title-text">查询项目</span>
+            </div>
+            <button id="sidebar-toggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="收起查询项目" title="收起查询项目">
+                <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+        </div>
+        <label class="visually-hidden" for="form-search">筛选查询项目</label>
+        <input type="text" class="sidebar-search" id="form-search" placeholder="筛选查询项目" oninput="filterForms()">
+        <div class="sidebar-list" id="form-tree"></div>
+    </aside>
+    <% } %>
+
+    <section class="app-main">
+        <header class="page-header">
+            <div class="page-heading-left">
+                <a class="report-home-link"
+                   href="<%= embed_mode ? '/?embed=1&hide_header=1&sidebar=0' : '/' %>"
+                   aria-label="返回报表主页" title="返回报表主页">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+                    <span>返回报表主页</span>
+                </a>
+                <div class="page-title-block">
+                    <h1 class="page-title"><%= form.title %></h1>
+                    <% if (form.description) { %>
+                    <p class="page-desc"><%= form.description %></p>
+                    <% } %>
+                </div>
+            </div>
+            <% if (sidebar_hidden) { %>
+            <div class="project-switcher" id="project-switcher">
+                <button class="project-switcher-trigger" id="project-switcher-trigger" type="button"
+                        aria-expanded="false" aria-controls="project-switcher-panel">
+                    <span class="project-switcher-label">查询项目</span>
+                    <span class="project-switcher-current">当前：<%= form.title %></span>
+                    <span class="project-switcher-caret" aria-hidden="true">▾</span>
+                </button>
+                <div class="project-switcher-panel" id="project-switcher-panel" hidden>
+                    <label class="visually-hidden" for="project-search">搜索查询项目</label>
+                    <input type="search" class="project-search" id="project-search" placeholder="搜索查询项目">
+                    <div class="project-menu-tree" id="project-menu-tree"></div>
+                </div>
+            </div>
+            <% } %>
+            <% if (current_user && !hide_header) { %>
+            <div style="text-align: right; color: #667085; font-size: 13px;">
+                <div>当前账号：<%= current_user %></div>
+                <form method="post" action="/logout" style="margin-top: 6px;">
+                    <input type="hidden" name="csrf_token" value="<%= csrf_token %>">
+                    <button type="submit" class="btn btn-sm btn-outline-secondary">退出登录</button>
+                </form>
+            </div>
+            <% } %>
+        </header>
+
+        <section class="business-section conditions-section" aria-labelledby="conditions-heading">
+            <div class="section-heading" id="conditions-heading">查询条件</div>
+            <% if (form.params && form.params.length > 0) { %>
+            <div class="params-grid">
+                <% form.params.forEach(function(p, index) { var loopIdx = index + 1; %>
+                    <% if (p.ptype === 'hidden') { %>
+                    <input type="hidden" class="param-input" data-name="<%= p.name %>" value="<%= (p.default || '').replace('{today}', '') %>">
+                    <% } else { %>
+                    <div class="param-field<%= p.ptype === 'checkbox' ? ' checkbox-field' : '' %>"<% if (p.width) { %> style="--param-width: <%= p.width %>;"<% } %>>
+                        <label for="param-<%= loopIdx %>"><%= p.label %><% if (p.required) { %><span class="required-mark" aria-label="必填">*</span><% } %></label>
+                        <% if (p.ptype === 'date') { %>
+                        <input id="param-<%= loopIdx %>" type="date" class="param-input" data-name="<%= p.name %>" data-default="<%= p.default || '' %>" value="<%= (p.default || '').replace('{today}', '') %>"<% if (p.placeholder) { %> placeholder="<%= p.placeholder %>"<% } %><% if (p.required) { %> required<% } %>>
+                        <% } else if (p.ptype === 'datetime') { %>
+                        <input id="param-<%= loopIdx %>" type="datetime-local" step="1" class="param-input" data-name="<%= p.name %>" data-default="<%= p.default || '' %>" value="<%= (p.default || '').replace(' ', 'T') %>"<% if (p.placeholder) { %> placeholder="<%= p.placeholder %>"<% } %><% if (p.required) { %> required<% } %>>
+                        <% } else if (p.ptype === 'number') { %>
+                        <input id="param-<%= loopIdx %>" type="number" class="param-input" data-name="<%= p.name %>" value="<%= p.default || '' %>" placeholder="<%= p.placeholder || '请输入数字' %>"<% if (p.required) { %> required<% } %>>
+                        <% } else if (p.ptype === 'select') { %>
+                        <div class="searchable-select" data-name="<%= p.name %>" data-required="<%= p.required ? '1' : '0' %>" data-allow-custom="<%= p.allow_custom ? '1' : '0' %>">
+                            <div class="searchable-select-control">
+                                <input id="param-<%= loopIdx %>" type="text" class="searchable-select-input" autocomplete="off"
+                                       role="combobox" aria-autocomplete="list" aria-expanded="false"
+                                       aria-controls="param-options-<%= loopIdx %>" placeholder="<%= p.placeholder || '输入关键字筛选' %>">
+                                <button type="button" class="searchable-select-toggle" tabindex="-1" aria-label="展开候选项">▾</button>
+                            </div>
+                            <input type="hidden" class="param-input searchable-select-value" data-name="<%= p.name %>" value="<%= p.default || '' %>">
+                            <div id="param-options-<%= loopIdx %>" class="searchable-select-menu" role="listbox" hidden>
+                                <% (p.option_items || []).forEach(function(opt) { %>
+                                <button type="button" class="searchable-select-option" role="option" data-value="<%= opt.value %>" aria-selected="<%= opt.value === p.default ? 'true' : 'false' %>"><%= opt.label %></button>
+                                <% }); %>
+                            </div>
+                        </div>
+                        <% } else if (p.ptype === 'textarea') { %>
+                        <textarea id="param-<%= loopIdx %>" class="param-input param-textarea" data-name="<%= p.name %>" placeholder="<%= p.placeholder || p.label %>"<% if (p.required) { %> required<% } %>><%= (p.default || '').replace('{today}', '') %></textarea>
+                        <% } else if (p.ptype === 'checkbox') { %>
+                        <label class="checkbox-control" for="param-<%= loopIdx %>">
+                            <input id="param-<%= loopIdx %>" type="checkbox" class="param-input" data-name="<%= p.name %>" data-checked-value="1" value="1" <%= ['1', 'true', 'yes', 'on', '是'].includes(String(p.default || '').toLowerCase()) ? 'checked' : '' %><% if (p.required) { %> required<% } %>>
+                            <span>是</span>
+                        </label>
+                        <% } else if (p.ptype === 'radio') { %>
+                        <div class="radio-group" id="param-<%= loopIdx %>">
+                            <% (p.option_items || []).forEach(function(opt, optIdx) { %>
+                            <label class="radio-control">
+                                <input type="radio" class="param-input" data-name="<%= p.name %>" value="<%= opt.value %>" <%= opt.value === p.default ? 'checked' : '' %><% if (p.required && optIdx === 0) { %> required<% } %>>
+                                <span><%= opt.label %></span>
+                            </label>
+                            <% }); %>
+                        </div>
+                        <% } else { %>
+                        <input id="param-<%= loopIdx %>" type="text" class="param-input" data-name="<%= p.name %>" value="<%= (p.default || '').replace('{today}', '') %>" placeholder="<%= p.placeholder || p.label %>"<% if (p.required) { %> required<% } %>>
+                        <% } %>
+                    </div>
+                    <% } %>
+                <% }); %>
+            </div>
+            <% } %>
+            <div class="action-bar">
+                <button class="btn btn-primary-action" id="btn-execute" type="button" onclick="executeQuery()">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                    <span class="button-text">查询</span>
+                </button>
+                <button class="btn btn-secondary-action" id="btn-export" type="button" onclick="exportExcel()" disabled>
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14v5h14v-5"/></svg>
+                    <span class="button-text">导出</span>
+                </button>
+                <span class="spinner d-none" id="loading" aria-label="正在查询"></span>
+            </div>
+        </section>
+        <section class="business-section result-section" aria-labelledby="result-heading">
+            <div class="section-heading result-heading" id="result-heading">
+                <div class="result-heading-left">
+                    <span class="result-title">查询结果</span>
+                    <span id="result-warning" class="result-warning d-none" aria-live="polite"></span>
+                </div>
+                <span class="action-status result-status" id="status-text" aria-live="polite"></span>
+            </div>
+            <div id="result-message" class="inline-message d-none" role="status"></div>
+            <div class="result-panel">
+                <table id="result-table" class="display" style="width:100%">
+                    <thead id="result-thead"></thead>
+                    <tbody id="result-tbody"></tbody>
+                </table>
+                <div class="result-empty" id="result-empty">设置查询条件后点击“查询”</div>
+            </div>
+        </section>
+    </section>
+</div>
+
+<%- include('partials/footer', { extra_js: `
+<script>
+    window.DBQUERY = {
+        filePath: "${file_path.replace(/#/g, '%23')}",
+        formParams: ${JSON.stringify(form.params || [])},
+        apiBase: ${JSON.stringify(typeof script_root !== 'undefined' ? script_root : '')},
+        embedMode: ${embed_mode ? 'true' : 'false'},
+        sidebarHidden: ${sidebar_hidden ? 'true' : 'false'}
+    };
+</script>
+` }) %>

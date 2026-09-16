@@ -2,6 +2,7 @@
 title = 用户查询
 group = 示例
 description = 按关键字、部门、状态查询用户信息
+web_enabled = true
 
 [params]
 keyword    = 姓名/账号关键字 | text

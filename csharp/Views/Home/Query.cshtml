@@ -1,0 +1,200 @@
+@using DbQuery.Models
+@using System.Text.Json
+@{
+    var form = ViewBag.Form as QryForm ?? new QryForm();
+    ViewData["Title"] = form.Title + " - 综合查询";
+    ViewBag.PageName = "query";
+    var filePath = ViewBag.FilePath as string ?? form.FilePath;
+    var embedMode = ViewBag.EmbedMode == true;
+    var hideHeader = ViewBag.HideHeader == true;
+    var sidebarHidden = ViewBag.SidebarHidden == true;
+    var currentUser = ViewBag.CurrentUser as string ?? "";
+}
+
+<div class="app-layout@(sidebarHidden ? " no-sidebar" : "")">
+    @if (!sidebarHidden)
+    {
+        <aside class="app-sidebar" id="sidebar" aria-label="查询项目">
+            <div class="sidebar-heading">
+                <div class="sidebar-title">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                    <span class="sidebar-title-text">查询项目</span>
+                </div>
+                <button id="sidebar-toggle" class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="收起查询项目" title="收起查询项目">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+                </button>
+            </div>
+            <label class="visually-hidden" for="form-search">筛选查询项目</label>
+            <input type="text" class="sidebar-search" id="form-search" placeholder="筛选查询项目" oninput="filterForms()">
+            <div class="sidebar-list" id="form-tree"></div>
+        </aside>
+    }
+
+    <section class="app-main">
+        <header class="page-header">
+            <div class="page-heading-left">
+                <a class="report-home-link"
+                   href="@(embedMode ? "/?embed=1&hide_header=1&sidebar=0" : "/")"
+                   aria-label="返回报表主页" title="返回报表主页">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
+                    <span>返回报表主页</span>
+                </a>
+                <div class="page-title-block">
+                    <h1 class="page-title">@form.Title</h1>
+                    @if (!string.IsNullOrEmpty(form.Description))
+                    {
+                        <p class="page-desc">@form.Description</p>
+                    }
+                </div>
+            </div>
+            @if (sidebarHidden)
+            {
+                <div class="project-switcher" id="project-switcher">
+                    <button class="project-switcher-trigger" id="project-switcher-trigger" type="button"
+                            aria-expanded="false" aria-controls="project-switcher-panel">
+                        <span class="project-switcher-label">查询项目</span>
+                        <span class="project-switcher-current">当前：@form.Title</span>
+                        <span class="project-switcher-caret" aria-hidden="true">▾</span>
+                    </button>
+                    <div class="project-switcher-panel" id="project-switcher-panel" hidden>
+                        <label class="visually-hidden" for="project-search">搜索查询项目</label>
+                        <input type="search" class="project-search" id="project-search" placeholder="搜索查询项目">
+                        <div class="project-menu-tree" id="project-menu-tree"></div>
+                    </div>
+                </div>
+            }
+            @if (!string.IsNullOrEmpty(currentUser) && !hideHeader)
+            {
+                <div style="text-align: right; color: #667085; font-size: 13px;">
+                    <div>当前账号：@currentUser</div>
+                    <form method="post" action="/logout" style="margin-top: 6px;">
+                        <button type="submit" class="btn btn-sm btn-outline-secondary">退出登录</button>
+                    </form>
+                </div>
+            }
+        </header>
+
+        <section class="business-section conditions-section" aria-labelledby="conditions-heading">
+            <div class="section-heading" id="conditions-heading">查询条件</div>
+            @if (form.Params != null && form.Params.Count > 0)
+            {
+                <div class="params-grid">
+                    @for (int index = 0; index < form.Params.Count; index++)
+                    {
+                        var p = form.Params[index];
+                        var loopIdx = index + 1;
+                        if (p.Ptype == "hidden")
+                        {
+                            <input type="hidden" class="param-input" data-name="@p.Name" value="@p.Default.Replace("{today}", "")">
+                        }
+                        else
+                        {
+                            <div class="param-field@(p.Ptype == "checkbox" ? " checkbox-field" : "")" style="@(!string.IsNullOrEmpty(p.Width) ? $"--param-width: {p.Width};" : "")">
+                                <label for="param-@loopIdx">@p.Label@if (p.Required){<span class="required-mark" aria-label="必填">*</span>}</label>
+                                @if (p.Ptype == "date")
+                                {
+                                    <input id="param-@loopIdx" type="date" class="param-input" data-name="@p.Name" data-default="@p.Default" value="@p.Default.Replace("{today}", "")" placeholder="@p.Placeholder" required="@(p.Required ? "required" : null)">
+                                }
+                                else if (p.Ptype == "datetime")
+                                {
+                                    <input id="param-@loopIdx" type="datetime-local" step="1" class="param-input" data-name="@p.Name" data-default="@p.Default" value="@p.Default.Replace(" ", "T")" placeholder="@p.Placeholder" required="@(p.Required ? "required" : null)">
+                                }
+                                else if (p.Ptype == "number")
+                                {
+                                    <input id="param-@loopIdx" type="number" class="param-input" data-name="@p.Name" value="@p.Default" placeholder="@(!string.IsNullOrEmpty(p.Placeholder) ? p.Placeholder : "请输入数字")" required="@(p.Required ? "required" : null)">
+                                }
+                                else if (p.Ptype == "select")
+                                {
+                                    <div class="searchable-select" data-name="@p.Name" data-required="@(p.Required ? "1" : "0")" data-allow-custom="@(p.AllowCustom ? "1" : "0")">
+                                        <div class="searchable-select-control">
+                                            <input id="param-@loopIdx" type="text" class="searchable-select-input" autocomplete="off"
+                                                   role="combobox" aria-autocomplete="list" aria-expanded="false"
+                                                   aria-controls="param-options-@loopIdx" placeholder="@(!string.IsNullOrEmpty(p.Placeholder) ? p.Placeholder : "输入关键字筛选")">
+                                            <button type="button" class="searchable-select-toggle" tabindex="-1" aria-label="展开候选项">▾</button>
+                                        </div>
+                                        <input type="hidden" class="param-input searchable-select-value" data-name="@p.Name" value="@p.Default">
+                                        <div id="param-options-@loopIdx" class="searchable-select-menu" role="listbox" hidden>
+                                            @foreach (var opt in p.OptionItems)
+                                            {
+                                                <button type="button" class="searchable-select-option" role="option" data-value="@opt.Value" aria-selected="@(opt.Value == p.Default ? "true" : "false")">@opt.Label</button>
+                                            }
+                                        </div>
+                                    </div>
+                                }
+                                else if (p.Ptype == "textarea")
+                                {
+                                    <textarea id="param-@loopIdx" class="param-input param-textarea" data-name="@p.Name" placeholder="@(!string.IsNullOrEmpty(p.Placeholder) ? p.Placeholder : p.Label)" required="@(p.Required ? "required" : null)">@p.Default.Replace("{today}", "")</textarea>
+                                }
+                                else if (p.Ptype == "checkbox")
+                                {
+                                    var isChecked = new[] { "1", "true", "yes", "on", "是" }.Contains(p.Default.ToLowerInvariant());
+                                    <label class="checkbox-control" for="param-@loopIdx">
+                                        <input id="param-@loopIdx" type="checkbox" class="param-input" data-name="@p.Name" data-checked-value="1" value="1" checked="@(isChecked ? "checked" : null)" required="@(p.Required ? "required" : null)">
+                                        <span>是</span>
+                                    </label>
+                                }
+                                else if (p.Ptype == "radio")
+                                {
+                                    <div class="radio-group" id="param-@loopIdx">
+                                        @for (int optIdx = 0; optIdx < p.OptionItems.Count; optIdx++)
+                                        {
+                                            var opt = p.OptionItems[optIdx];
+                                            <label class="radio-control">
+                                                <input type="radio" class="param-input" data-name="@p.Name" value="@opt.Value" checked="@(opt.Value == p.Default ? "checked" : null)" required="@(p.Required && optIdx == 0 ? "required" : null)">
+                                                <span>@opt.Label</span>
+                                            </label>
+                                        }
+                                    </div>
+                                }
+                                else
+                                {
+                                    <input id="param-@loopIdx" type="text" class="param-input" data-name="@p.Name" value="@p.Default.Replace("{today}", "")" placeholder="@(!string.IsNullOrEmpty(p.Placeholder) ? p.Placeholder : p.Label)" required="@(p.Required ? "required" : null)">
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            }
+            <div class="action-bar">
+                <button class="btn btn-primary-action" id="btn-execute" type="button" onclick="executeQuery()">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                    <span class="button-text">查询</span>
+                </button>
+                <button class="btn btn-secondary-action" id="btn-export" type="button" onclick="exportExcel()" disabled>
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14v5h14v-5"/></svg>
+                    <span class="button-text">导出</span>
+                </button>
+                <span class="spinner d-none" id="loading" aria-label="正在查询"></span>
+            </div>
+        </section>
+        <section class="business-section result-section" aria-labelledby="result-heading">
+            <div class="section-heading result-heading" id="result-heading">
+                <div class="result-heading-left">
+                    <span class="result-title">查询结果</span>
+                    <span id="result-warning" class="result-warning d-none" aria-live="polite"></span>
+                </div>
+                <span class="action-status result-status" id="status-text" aria-live="polite"></span>
+            </div>
+            <div id="result-message" class="inline-message d-none" role="status"></div>
+            <div class="result-panel">
+                <table id="result-table" class="display" style="width:100%">
+                    <thead id="result-thead"></thead>
+                    <tbody id="result-tbody"></tbody>
+                </table>
+                <div class="result-empty" id="result-empty">设置查询条件后点击“查询”</div>
+            </div>
+        </section>
+    </section>
+</div>
+
+@section Scripts {
+<script>
+    window.DBQUERY = {
+        filePath: "@Html.Raw(filePath.Replace("\"", "\\\""))",
+        formParams: @Html.Raw(JsonSerializer.Serialize(form.Params ?? new List<ParamDef>())),
+        apiBase: "",
+        embedMode: @(embedMode ? "true" : "false"),
+        sidebarHidden: @(sidebarHidden ? "true" : "false")
+    };
+</script>
+}
