@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTabWidget, QLabel, QPushButton, QToolBar,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QLineEdit,
-    QFrame, QSizePolicy, QAction, QTabBar, QInputDialog
+    QFrame, QSizePolicy, QAction, QTabBar, QInputDialog, QComboBox
 )
 from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QFileSystemWatcher, QEvent
 from PyQt5.QtGui import QFont, QIcon, QColor
@@ -170,6 +170,16 @@ class MainWindow(QMainWindow):
             "border-radius: 4px; border-left: 3px solid #1A6EB5;"
         )
 
+        # 分组筛选下拉框
+        group_filter_layout = QHBoxLayout()
+        group_filter_lbl = QLabel(u"分组:")
+        group_filter_lbl.setStyleSheet("color: #4A5568; font-size: 12px; font-weight: bold;")
+        self.group_combo = QComboBox()
+        self.group_combo.setToolTip(u"选择分组以快速筛选，或切换查看全部分组")
+        self.group_combo.currentIndexChanged.connect(self._on_group_filter_changed)
+        group_filter_layout.addWidget(group_filter_lbl)
+        group_filter_layout.addWidget(self.group_combo, stretch=1)
+
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText(u"搜索表单…")
         self.search_edit.setClearButtonEnabled(True)
@@ -190,6 +200,7 @@ class MainWindow(QMainWindow):
         self.form_tree.customContextMenuRequested.connect(self._tree_context_menu)
 
         lv.addWidget(tree_title)
+        lv.addLayout(group_filter_layout)
         lv.addWidget(self.search_edit)
         lv.addWidget(self.form_tree)
 
@@ -284,11 +295,37 @@ class MainWindow(QMainWindow):
     # ════════════════════════════════════════
     def _load_forms(self):
         self.forms_data = FormParser.load_forms_from_dir(FORMS_DIR)
-        self._rebuild_tree(self.forms_data)
+        self._update_group_combo()
+        self._do_filter_tree()
         self._update_watched_paths()
         total_forms = sum(len(v) for v in self.forms_data.values())
         total_groups = len(self.forms_data)
         self.statusBar().showMessage(u"已加载 {} 个分组，共 {} 个表单".format(total_groups, total_forms))
+
+    def _update_group_combo(self):
+        if not hasattr(self, 'group_combo'):
+            return
+        prev_group = self.group_combo.currentData()
+        self.group_combo.blockSignals(True)
+        self.group_combo.clear()
+
+        all_count = sum(len(v) for v in self.forms_data.values())
+        self.group_combo.addItem(u"📁 全部分组 ({})".format(all_count), userData=None)
+
+        target_idx = 0
+        idx = 1
+        for grp in sorted(self.forms_data.keys()):
+            count = len(self.forms_data[grp])
+            self.group_combo.addItem(u"📁 {} ({})".format(grp, count), userData=grp)
+            if prev_group and grp == prev_group:
+                target_idx = idx
+            idx += 1
+
+        self.group_combo.setCurrentIndex(target_idx)
+        self.group_combo.blockSignals(False)
+
+    def _on_group_filter_changed(self, index):
+        self._do_filter_tree()
 
     def _update_watched_paths(self):
         """确保 forms 根目录及其直接子目录都在监听列表中"""
@@ -324,11 +361,14 @@ class MainWindow(QMainWindow):
             self._schedule_fs_reload()
         super(MainWindow, self).changeEvent(event)
 
-    def _rebuild_tree(self, data, filter_text=''):
+    def _rebuild_tree(self, data, filter_text='', selected_group=None):
         self.form_tree.clear()
         ft = filter_text.strip().lower()
 
         for group in sorted(data.keys()):
+            if selected_group is not None and group != selected_group:
+                continue
+
             forms = data[group]
             matching_forms = [f for f in forms if not ft or ft in f.title.lower()]
 
@@ -365,7 +405,8 @@ class MainWindow(QMainWindow):
             grp_item.setExpanded(True)
 
     def _do_filter_tree(self):
-        self._rebuild_tree(self.forms_data, self.search_edit.text())
+        selected_grp = self.group_combo.currentData() if hasattr(self, 'group_combo') else None
+        self._rebuild_tree(self.forms_data, self.search_edit.text(), selected_group=selected_grp)
 
     def _on_tree_double_click(self, item, col):
         if not item:
@@ -506,6 +547,8 @@ class MainWindow(QMainWindow):
                 grp = curr.data(0, Qt.UserRole + 1)
                 if grp:
                     default_group = grp
+            if not default_group and hasattr(self, 'group_combo'):
+                default_group = self.group_combo.currentData()
         dlg = FormEditorDialog(None, FORMS_DIR, parent=self, default_group=default_group)
         if dlg.exec_():
             self._load_forms()
@@ -583,6 +626,15 @@ class MainWindow(QMainWindow):
             subprocess.Popen(['explorer', group_dir])
 
     def _select_group_in_tree(self, group_name, file_path=None):
+        if hasattr(self, 'group_combo'):
+            curr_data = self.group_combo.currentData()
+            if curr_data and curr_data != group_name:
+                idx = self.group_combo.findData(group_name)
+                if idx >= 0:
+                    self.group_combo.setCurrentIndex(idx)
+                else:
+                    self.group_combo.setCurrentIndex(0)
+
         for i in range(self.form_tree.topLevelItemCount()):
             top = self.form_tree.topLevelItem(i)
             if top.data(0, Qt.UserRole + 1) == group_name:
@@ -697,6 +749,7 @@ def main():
     try:
         app = QApplication(sys.argv)
         app.setStyle('Fusion')
+        QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)
         app_icon_path = os.path.join(BASE_DIR, 'app.ico')
         if not os.path.exists(app_icon_path):
             app_icon_path = os.path.join(BASE_DIR, 'app.png')
@@ -803,10 +856,6 @@ QDateEdit, QDateTimeEdit {
 QDateEdit:focus, QDateTimeEdit:focus {
     border-color: #1A6EB5;
 }
-QDateEdit::drop-down, QDateTimeEdit::drop-down {
-    border: none;
-    width: 20px;
-}
 
 /* ── 下拉框 ── */
 QComboBox {
@@ -818,10 +867,6 @@ QComboBox {
 }
 QComboBox:focus {
     border-color: #1A6EB5;
-}
-QComboBox::drop-down {
-    border: none;
-    width: 22px;
 }
 QComboBox QAbstractItemView {
     background: #FFFFFF;

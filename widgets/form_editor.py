@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QPlainTextEdit, QGroupBox, QFormLayout, QCheckBox,
     QMessageBox, QFileDialog, QSizePolicy, QComboBox
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QObject, QEvent, QTimer
 from PyQt5.QtGui import (
     QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QFontMetrics
 )
@@ -84,6 +84,20 @@ class QryHighlighter(QSyntaxHighlighter):
                 self.setFormat(m.start(), m.end() - m.start(), fmt)
 
 
+class ComboLineEditClickFilter(QObject):
+    """确保点击可编辑 QComboBox 的输入框区域时，也能直接触发弹出下拉菜单"""
+
+    def __init__(self, combo):
+        super(ComboLineEditClickFilter, self).__init__(combo)
+        self.combo = combo
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.MouseButtonPress:
+            if not self.combo.view().isVisible():
+                QTimer.singleShot(10, self.combo.showPopup)
+        return False
+
+
 # ──────────────────────────────────────────────
 #  对话框主体
 # ──────────────────────────────────────────────
@@ -142,7 +156,12 @@ class FormEditorDialog(QDialog):
         self.group_combo = QComboBox()
         self.group_combo.setEditable(True)
         self.group_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.group_combo.setMinimumHeight(26)
+        self.group_combo.setMaxVisibleItems(15)
         self.group_combo.setToolTip("可直接下拉选择已有分组，或直接输入新分组名称（保存时将自动归入对应文件夹）")
+        if self.group_combo.lineEdit():
+            self._combo_click_filter = ComboLineEditClickFilter(self.group_combo)
+            self.group_combo.lineEdit().installEventFilter(self._combo_click_filter)
 
         existing_groups = []
         if os.path.isdir(self.forms_dir):

@@ -353,6 +353,55 @@ class GroupAndFormLoadingTests(unittest.TestCase):
             dlg._save()
             self.assertTrue(mock_critical.called)
 
+    def test_form_editor_combo_clickable_filter(self):
+        """测试 FormEditorDialog 的 group_combo 具备点击弹出事件过滤器与属性"""
+        dlg = FormEditorDialog(None, self.forms_dir)
+        self.assertTrue(dlg.group_combo.isEditable())
+        self.assertIsNotNone(getattr(dlg, '_combo_click_filter', None))
+        self.assertEqual(dlg.group_combo.minimumHeight(), 26)
+        self.assertEqual(dlg.group_combo.maxVisibleItems(), 15)
+
+    def test_mainwindow_group_combo_filter(self):
+        """测试主窗口启动时具有分组下拉框，支持下拉切换与表单树联动过滤"""
+        # 创建两个测试分组目录及表单
+        grp1_dir = os.path.join(self.forms_dir, '分组一')
+        grp2_dir = os.path.join(self.forms_dir, '分组二')
+        os.makedirs(grp1_dir, exist_ok=True)
+        os.makedirs(grp2_dir, exist_ok=True)
+        with open(os.path.join(grp1_dir, '表单1.qry'), 'w', encoding='utf-8') as f:
+            f.write("[meta]\ntitle = 表单1\n[sql]\nSELECT 1\n")
+        with open(os.path.join(grp2_dir, '表单2.qry'), 'w', encoding='utf-8') as f:
+            f.write("[meta]\ntitle = 表单2\n[sql]\nSELECT 2\n")
+
+        from unittest.mock import patch
+        with patch('main.FORMS_DIR', self.forms_dir):
+            win = MainWindow()
+            self.assertIsNotNone(getattr(win, 'group_combo', None))
+            # 应当包含：全部分组、分组一、分组二
+            self.assertEqual(win.group_combo.count(), 3)
+            self.assertIn('全部分组', win.group_combo.itemText(0))
+            self.assertIn('分组一', win.group_combo.itemText(1))
+            self.assertIn('分组二', win.group_combo.itemText(2))
+
+            # 初始状态全部分组，树中包含两个根节点
+            self.assertEqual(win.form_tree.topLevelItemCount(), 2)
+
+            # 选择 分组一 (index 1)
+            win.group_combo.setCurrentIndex(1)
+            self.assertEqual(win.form_tree.topLevelItemCount(), 1)
+            self.assertIn('分组一', win.form_tree.topLevelItem(0).text(0))
+
+            # 选择 分组二 (index 2)
+            win.group_combo.setCurrentIndex(2)
+            self.assertEqual(win.form_tree.topLevelItemCount(), 1)
+            self.assertIn('分组二', win.form_tree.topLevelItem(0).text(0))
+
+            # 切换回 全部分组 (index 0)
+            win.group_combo.setCurrentIndex(0)
+            self.assertEqual(win.form_tree.topLevelItemCount(), 2)
+
+            win.close()
+
 
 if __name__ == '__main__':
     unittest.main()
