@@ -100,6 +100,11 @@ SELECT 1 AS Result
         self.assertIn('.btn-reset-action', css)
         self.assertIn('.conditions-section', css)
         self.assertIn('.result-section', css)
+        # 抽屉与嵌入模式冗余 Header 隐藏样式
+        self.assertIn('.drawer-toggle-btn', css)
+        self.assertIn('.floating-drawer', css)
+        self.assertIn('.drawer-backdrop', css)
+        self.assertIn('.embed-mode .tab-pane:not(#pane-tab-welcome) .page-header', css)
 
     def test_javascript_contains_tab_manager_and_reset_functions(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -112,6 +117,40 @@ SELECT 1 AS Result
         self.assertIn('openReport', js)
         self.assertIn('closeTab', js)
         self.assertIn('activateTab', js)
+        # DrawerManager
+        self.assertIn('var DrawerManager = {', js)
+        self.assertIn('DrawerManager.init()', js)
+        self.assertIn('toggle: function', js)
+        self.assertIn('open: function', js)
+        self.assertIn('close: function', js)
+        self.assertIn('render: function', js)
+
+    def test_floating_drawer_and_toggle_button_in_pages(self):
+        # 1. 首页包含抽屉触发按钮与抽屉容器
+        res_index = self.client.get('/')
+        self.assertEqual(res_index.status_code, 200)
+        html_index = res_index.get_data(as_text=True)
+        self.assertIn('id="drawer-toggle-btn"', html_index)
+        self.assertIn('id="floating-drawer"', html_index)
+        self.assertIn('id="drawer-backdrop"', html_index)
+        self.assertIn('id="drawer-tree"', html_index)
+
+        # 2. 查询页包含抽屉触发按钮与抽屉容器
+        res_query = self.client.get('/query/{}'.format(self.file_path))
+        self.assertEqual(res_query.status_code, 200)
+        html_query = res_query.get_data(as_text=True)
+        self.assertIn('id="drawer-toggle-btn"', html_query)
+        self.assertIn('id="floating-drawer"', html_query)
+        self.assertIn('id="drawer-backdrop"', html_query)
+
+        # 3. 登录页不包含抽屉相关 DOM
+        with self.client.session_transaction() as s:
+            s.clear()
+        res_login = self.client.get('/login')
+        self.assertEqual(res_login.status_code, 200)
+        html_login = res_login.get_data(as_text=True)
+        self.assertNotIn('id="drawer-toggle-btn"', html_login)
+        self.assertNotIn('id="floating-drawer"', html_login)
 
     def test_logo_assets_exist_and_are_valid(self):
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

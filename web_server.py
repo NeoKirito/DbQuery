@@ -880,6 +880,7 @@ def query_page(file_path):
         form=serialize_form(form, BASE_DIR),
         file_path=decoded_path,
         csrf_token=_csrf_token(),
+        forms_data=load_all_forms(FORMS_DIR, web_only=True),
         **page_context
     )
 
