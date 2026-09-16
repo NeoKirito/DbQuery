@@ -17,6 +17,12 @@ else:
 os.chdir(BASE_DIR)
 sys.path.insert(0, BASE_DIR)
 
+try:
+    import ctypes
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('neokirito.dbquery.app.v1')
+except Exception:
+    pass
+
 
 def run_desktop():
     """启动桌面版"""

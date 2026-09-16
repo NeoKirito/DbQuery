@@ -679,6 +679,12 @@ def main():
         logger.warning("High DPI support failed: %s", str(e))
 
     try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('neokirito.dbquery.app.v1')
+    except Exception:
+        pass
+
+    try:
         app = QApplication(sys.argv)
         app.setStyle('Fusion')
         app_icon_path = os.path.join(BASE_DIR, 'app.ico')
