@@ -52,9 +52,6 @@ else
     app.UseStaticFiles();
 }
 
-app.UseRouting();
-app.UseSession();
-
 // 安全头与 iframe 跨域嵌入支持
 app.Use(async (context, next) =>
 {
@@ -91,9 +88,12 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.UseRouting();
+app.UseSession();
+
 app.MapControllers();
 app.MapDefaultControllerRoute();
 
 var port = Environment.GetEnvironmentVariable("PORT") ?? "3000";
 Console.WriteLine($"DbQuery C# (.NET 8) Web Server running on port {port}");
-app.Run();
+app.Run($"http://0.0.0.0:{port}");
