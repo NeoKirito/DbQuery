@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from flask import (Flask, jsonify, make_response, redirect, render_template, request,
                    send_file, session, url_for)
@@ -315,15 +315,86 @@ def _issue_integration_ticket(username, next_url, ttl_seconds, auth_source='host
     return ticket
 
 
+def _extract_request_origin(req=None):
+    """提取浏览器请求的 Origin，在 Referrer Policy 等限制下回退到 Referer 或 Host。"""
+    req = req or request
+    origin = (req.headers.get('Origin') or '').strip().rstrip('/')
+    if origin and origin.lower() != 'null':
+        return origin.lower()
+
+    referer = (req.headers.get('Referer') or '').strip()
+    if referer:
+        try:
+            parsed = urlparse(referer)
+            if parsed.scheme and parsed.netloc:
+                return '{}://{}'.format(parsed.scheme.lower(), parsed.netloc.lower()).rstrip('/')
+        except Exception:
+            pass
+
+    host = req.headers.get('X-Forwarded-Host') or req.headers.get('Host')
+    if host:
+        proto = req.headers.get('X-Forwarded-Proto') or getattr(req, 'scheme', 'http') or 'http'
+        return '{}://{}'.format(proto.lower(), host.lower()).rstrip('/')
+
+    return (getattr(req, 'host_url', '') or '').strip().lower().rstrip('/')
+
+
+def _is_allowed_origin(origin, allowed_origins, allow_all=False, req=None):
+    """判断给定的 Origin 是否在允许列表中，支持通配符、同机不同端口及同源访问。"""
+    if not origin:
+        return False
+    if allow_all or '*' in (allowed_origins or []):
+        return True
+
+    origin_norm = origin.strip().lower().rstrip('/')
+    normalized_allowed = [o.strip().lower().rstrip('/') for o in (allowed_origins or []) if o]
+
+    if origin_norm in normalized_allowed:
+        return True
+
+    req = req or request
+    # 与 DbQuery 自身同源直接允许
+    try:
+        current_server_origin = (getattr(req, 'host_url', '') or '').strip().lower().rstrip('/')
+        if current_server_origin and origin_norm == current_server_origin:
+            return True
+    except Exception:
+        pass
+
+    # 同机 IP / 主机匹配（同一服务器上不同端口，如 192.168.0.237:8080 访问 192.168.0.237:6091）
+    try:
+        parsed_origin = urlparse(origin_norm)
+        origin_hostname = parsed_origin.hostname
+        current_host = (req.headers.get('Host') or getattr(req, 'host', '') or '').split(':')[0].lower()
+        if origin_hostname and current_host and origin_hostname == current_host:
+            return True
+    except Exception:
+        pass
+
+    # 允许列表中的主机名匹配（如果配置了无端口的 http://192.168.0.237 或端口一致）
+    for allowed in normalized_allowed:
+        try:
+            parsed_allowed = urlparse(allowed)
+            if parsed_allowed.hostname and parsed_allowed.hostname == urlparse(origin_norm).hostname:
+                if not parsed_allowed.port or parsed_allowed.port == urlparse(origin_norm).port:
+                    return True
+        except Exception:
+            continue
+
+    return False
+
+
 def _frontend_integration_config():
     """验证浏览器请求来源是否是管理员明确配置的宿主前端 Origin。"""
     cfg = DBManager().get_integration_config()
-    origin = request.headers.get('Origin', '').strip().lower().rstrip('/')
-    if not cfg.get('frontend_enabled') or not cfg.get('frontend_allowed_origins'):
+    if not cfg.get('frontend_enabled'):
         return None, None, _integration_error(
             '前端无密钥登录尚未启用。', 403, 'frontend_integration_not_enabled'
         )
-    if not origin or origin not in cfg['frontend_allowed_origins']:
+    origin = _extract_request_origin()
+    allowed_origins = cfg.get('frontend_allowed_origins', [])
+    allow_all = bool(cfg.get('frontend_embed_allow_all')) or ('*' in allowed_origins)
+    if not _is_allowed_origin(origin, allowed_origins, allow_all=allow_all):
         return None, None, _integration_error(
             '宿主前端来源未获授权。', 403, 'frontend_integration_origin_denied'
         )
@@ -335,8 +406,10 @@ def _frontend_cors_response(response, origin):
     response = make_response(response)
     response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    response.headers['Access-Control-Max-Age'] = '300'
+    response.headers['Access-Control-Allow-Headers'] = (
+        'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-DBQuery-Embed-Token'
+    )
+    response.headers['Access-Control-Max-Age'] = '86400'
     response.headers['Vary'] = 'Origin'
     return response
 
@@ -348,12 +421,14 @@ def _frontend_ticket_error(message, status, error_type, origin):
 def _frontend_embed_config():
     """验证 Frontend Embed V1 是否显式启用及浏览器来源是否获准。"""
     cfg = DBManager().get_integration_config()
-    origin = request.headers.get('Origin', '').strip().lower().rstrip('/')
-    if not cfg.get('frontend_embed_enabled') or not cfg.get('frontend_embed_allowed_origins'):
+    if not cfg.get('frontend_embed_enabled'):
         return None, None, _integration_error(
             'Frontend Embed 尚未启用。', 403, 'SESSION_FAILED'
         )
-    if not origin or origin not in cfg['frontend_embed_allowed_origins']:
+    origin = _extract_request_origin()
+    allowed_origins = cfg.get('frontend_embed_allowed_origins', [])
+    allow_all = bool(cfg.get('frontend_embed_allow_all')) or ('*' in allowed_origins)
+    if not _is_allowed_origin(origin, allowed_origins, allow_all=allow_all):
         return None, None, _integration_error(
             '宿主前端来源未获授权。', 403, 'ORIGIN_DENIED'
         )
@@ -366,8 +441,10 @@ def _frontend_embed_cors_response(response, origin, methods='POST, OPTIONS'):
     response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Credentials'] = 'true'
     response.headers['Access-Control-Allow-Methods'] = methods
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
-    response.headers['Access-Control-Max-Age'] = '300'
+    response.headers['Access-Control-Allow-Headers'] = (
+        'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-DBQuery-Embed-Token'
+    )
+    response.headers['Access-Control-Max-Age'] = '86400'
     response.headers['Vary'] = 'Origin'
     return response
 
@@ -442,17 +519,23 @@ def apply_security_headers(response):
         response.headers['Pragma'] = 'no-cache'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = (
-        'no-referrer' if request.environ.get('DBQUERY_EMBED_TOKEN') else 'same-origin'
+        'no-referrer' if request.environ.get('DBQUERY_EMBED_TOKEN') else 'strict-origin-when-cross-origin'
     )
     # 以 CSP 为准控制 iframe 祖先；移除可能与 CSP 冲突的旧 X-Frame-Options。
     try:
-        frame_ancestors = DBManager().get_integration_config().get('frame_ancestors', [])
+        cfg = DBManager().get_integration_config()
+        frame_ancestors = cfg.get('frame_ancestors', [])
+        frame_allow_all = bool(cfg.get('frame_ancestors_allow_all')) or ('*' in frame_ancestors)
     except Exception:
         frame_ancestors = []
+        frame_allow_all = False
     response.headers.pop('X-Frame-Options', None)
-    response.headers['Content-Security-Policy'] = 'frame-ancestors {}'.format(
-        ' '.join(["'self'"] + list(frame_ancestors or []))
-    )
+    if frame_allow_all:
+        response.headers['Content-Security-Policy'] = "frame-ancestors 'self' *"
+    else:
+        response.headers['Content-Security-Policy'] = 'frame-ancestors {}'.format(
+            ' '.join(["'self'"] + list(frame_ancestors or []))
+        )
     return response
 
 
@@ -539,11 +622,18 @@ def _csrf_token():
 @app.route('/api/integration/frontend-ticket', methods=['POST', 'OPTIONS'])
 def issue_frontend_integration_ticket():
     """供无后端的宿主前端调用：凭当前登录凭据换取一次性短期 iframe 票据。"""
+    if request.method == 'OPTIONS':
+        cfg = DBManager().get_integration_config()
+        origin = _extract_request_origin()
+        allowed_origins = cfg.get('frontend_allowed_origins', [])
+        allow_all = bool(cfg.get('frontend_embed_allow_all')) or ('*' in allowed_origins)
+        if not cfg.get('frontend_enabled') or not _is_allowed_origin(origin, allowed_origins, allow_all=allow_all):
+            return _integration_error('宿主前端来源未获授权。', 403, 'frontend_integration_origin_denied')
+        return _frontend_cors_response(('', 204), origin)
+
     cfg, origin, failure = _frontend_integration_config()
     if failure is not None:
         return failure
-    if request.method == 'OPTIONS':
-        return _frontend_cors_response(('', 204), origin)
     if request.content_length is not None and request.content_length > _INTEGRATION_MAX_BODY_LENGTH:
         return _frontend_ticket_error('前端无感登录请求过大。', 413,
                                       'invalid_frontend_integration_request', origin)
@@ -581,11 +671,18 @@ def issue_frontend_integration_ticket():
 @app.route('/api/integration/session', methods=['GET', 'OPTIONS'])
 def frontend_embed_session():
     """供 Embed SDK 判断当前浏览器是否已有有效 DBQuery Session。"""
+    if request.method == 'OPTIONS':
+        cfg = DBManager().get_integration_config()
+        origin = _extract_request_origin()
+        allowed_origins = cfg.get('frontend_embed_allowed_origins', [])
+        allow_all = bool(cfg.get('frontend_embed_allow_all')) or ('*' in allowed_origins)
+        if not cfg.get('frontend_embed_enabled') or not _is_allowed_origin(origin, allowed_origins, allow_all=allow_all):
+            return _integration_error('宿主前端来源未获授权。', 403, 'ORIGIN_DENIED')
+        return _frontend_embed_cors_response(('', 204), origin, 'GET, OPTIONS')
+
     _, origin, failure = _frontend_embed_config()
     if failure is not None:
         return failure
-    if request.method == 'OPTIONS':
-        return _frontend_embed_cors_response(('', 204), origin, 'GET, OPTIONS')
     return _frontend_embed_cors_response(jsonify({
         'authenticated': _session_is_authenticated()
     }), origin, 'GET, OPTIONS')
@@ -594,11 +691,18 @@ def frontend_embed_session():
 @app.route('/api/integration/frontend-login', methods=['POST', 'OPTIONS'])
 def frontend_embed_login():
     """以本次 POST 的账号密码建立 DBQuery 自己的 Embed Session。"""
+    if request.method == 'OPTIONS':
+        cfg = DBManager().get_integration_config()
+        origin = _extract_request_origin()
+        allowed_origins = cfg.get('frontend_embed_allowed_origins', [])
+        allow_all = bool(cfg.get('frontend_embed_allow_all')) or ('*' in allowed_origins)
+        if not cfg.get('frontend_embed_enabled') or not _is_allowed_origin(origin, allowed_origins, allow_all=allow_all):
+            return _integration_error('宿主前端来源未获授权。', 403, 'ORIGIN_DENIED')
+        return _frontend_embed_cors_response(('', 204), origin)
+
     cfg, origin, failure = _frontend_embed_config()
     if failure is not None:
         return failure
-    if request.method == 'OPTIONS':
-        return _frontend_embed_cors_response(('', 204), origin)
     if request.content_length is not None and request.content_length > _INTEGRATION_MAX_BODY_LENGTH:
         return _frontend_embed_error('账号或密码错误。', 400, 'AUTH_FAILED', origin)
 
@@ -640,11 +744,18 @@ def frontend_embed_login():
 @app.route('/api/integration/logout', methods=['POST', 'OPTIONS'])
 def frontend_embed_logout():
     """只清除 DBQuery Session，不触碰宿主系统的认证状态或凭据。"""
+    if request.method == 'OPTIONS':
+        cfg = DBManager().get_integration_config()
+        origin = _extract_request_origin()
+        allowed_origins = cfg.get('frontend_embed_allowed_origins', [])
+        allow_all = bool(cfg.get('frontend_embed_allow_all')) or ('*' in allowed_origins)
+        if not cfg.get('frontend_embed_enabled') or not _is_allowed_origin(origin, allowed_origins, allow_all=allow_all):
+            return _integration_error('宿主前端来源未获授权。', 403, 'ORIGIN_DENIED')
+        return _frontend_embed_cors_response(('', 204), origin)
+
     _, origin, failure = _frontend_embed_config()
     if failure is not None:
         return failure
-    if request.method == 'OPTIONS':
-        return _frontend_embed_cors_response(('', 204), origin)
     data = request.get_json(silent=True) or {}
     embed_token = str(data.get('embed_session') or '')
     if len(embed_token) <= 128:

@@ -155,9 +155,12 @@ class ConfigDialog(QDialog):
             self._integration_cfg.get('frontend_allowed_origins', []) or
             self._integration_cfg.get('frame_ancestors', [])
         )
-        self.frontend_address_edit.setText(
-            self._display_frontend_address(origins[0]) if origins else ''
-        )
+        if self._integration_cfg.get('frontend_embed_allow_all') or self._integration_cfg.get('frame_ancestors_allow_all'):
+            self.frontend_address_edit.setText('*')
+        else:
+            self.frontend_address_edit.setText(
+                self._display_frontend_address(origins[0]) if origins else ''
+            )
 
     @staticmethod
     def _display_frontend_address(origin):
@@ -169,10 +172,12 @@ class ConfigDialog(QDialog):
 
     @staticmethod
     def _frontend_origin(address):
-        """把单个“IP/主机:端口”规范化为可保存的 Origin。"""
+        """把单个“IP/主机:端口”或“*”规范化为可保存的 Origin。"""
         from db_manager import DBManager
 
         value = str(address or '').strip()
+        if value == '*':
+            return '*'
         if not value or any(separator in value for separator in (',', ';', '\n')):
             return ''
         candidate = value if '://' in value else 'http://' + value
@@ -243,7 +248,7 @@ class ConfigDialog(QDialog):
             if not integration_cfg['frontend_embed_allowed_origins']:
                 QMessageBox.warning(
                     self, "提示",
-                    "请填写有效的前端 IP 和端口，例如 192.168.0.39:8080"
+                    "请填写有效的前端 IP 和端口，例如 192.168.0.39:8080 或 *"
                 )
                 return
         self.db_manager.set_db_config(cfg)

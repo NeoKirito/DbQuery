@@ -147,6 +147,14 @@ class DBManager:
     def get_integration_config(self):
         """返回宿主无感登录配置；缺省时所有无感登录模式均关闭。"""
         section = self.config['integration'] if self.config.has_section('integration') else {}
+        raw_frontend_origins = str(section.get('frontend_allowed_origins', '')).strip()
+        raw_embed_origins = str(section.get('frontend_embed_allowed_origins', '')).strip()
+        raw_frame_ancestors = str(section.get('frame_ancestors', '')).strip()
+
+        frontend_allowed_origins = self._parse_allowed_origins(raw_frontend_origins)
+        frontend_embed_allowed_origins = self._parse_allowed_origins(raw_embed_origins)
+        frame_ancestors = self._parse_allowed_origins(raw_frame_ancestors)
+
         return {
             'enabled': str(section.get('enabled', 'no')).lower() in ('yes', '1', 'true', 'on'),
             'shared_key': section.get('shared_key', '').strip(),
@@ -160,18 +168,16 @@ class DBManager:
             ),
             'frontend_enabled': str(section.get('frontend_enabled', 'no')).lower() in
                                 ('yes', '1', 'true', 'on'),
-            'frontend_allowed_origins': self._parse_allowed_origins(
-                section.get('frontend_allowed_origins', '')
-            ),
+            'frontend_allowed_origins': frontend_allowed_origins,
             'frontend_embed_enabled': str(section.get('frontend_embed_enabled', 'no')).lower() in
                                       ('yes', '1', 'true', 'on'),
-            'frontend_embed_allowed_origins': self._parse_allowed_origins(
-                section.get('frontend_embed_allowed_origins', '')
-            ),
+            'frontend_embed_allowed_origins': frontend_embed_allowed_origins,
+            'frontend_embed_allow_all': '*' in raw_embed_origins or '*' in raw_frontend_origins,
             'frontend_embed_session_minutes': self._positive_int(
                 section.get('frontend_embed_session_minutes'), 60, maximum=1440
             ),
-            'frame_ancestors': self._parse_allowed_origins(section.get('frame_ancestors', '')),
+            'frame_ancestors': frame_ancestors,
+            'frame_ancestors_allow_all': '*' in raw_frame_ancestors,
         }
 
     @staticmethod
@@ -214,16 +220,16 @@ class DBManager:
                 int(DEFAULT_INTEGRATION_CONFIG['max_clock_skew_seconds']), maximum=300
             )),
             'frontend_enabled': 'yes' if cfg_dict.get('frontend_enabled') else 'no',
-            'frontend_allowed_origins': ', '.join(frontend_origins),
+            'frontend_allowed_origins': '*' if not frontend_origins and '*' in str(raw_origins) else ', '.join(frontend_origins),
             'frontend_embed_enabled': 'yes' if self._flag(cfg_dict.get(
                 'frontend_embed_enabled', section['frontend_embed_enabled']
             )) else 'no',
-            'frontend_embed_allowed_origins': ', '.join(embed_origins),
+            'frontend_embed_allowed_origins': '*' if not embed_origins and '*' in str(embed_origins_raw) else ', '.join(embed_origins),
             'frontend_embed_session_minutes': str(self._positive_int(
                 cfg_dict.get('frontend_embed_session_minutes', section['frontend_embed_session_minutes']),
                 60, maximum=1440
             )),
-            'frame_ancestors': ', '.join(frame_ancestors),
+            'frame_ancestors': '*' if not frame_ancestors and '*' in str(frame_ancestors_raw) else ', '.join(frame_ancestors),
         })
 
         self.config['integration'] = section

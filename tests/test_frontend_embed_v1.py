@@ -264,6 +264,80 @@ class FrontendEmbedV1Tests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn('DBQueryEmbed SDK tests passed', completed.stdout)
 
+    def test_options_preflight_for_frontend_login_returns_204_with_cors_headers(self):
+        manager = EmbedManager()
+        with self.manager_patch(manager):
+            response = self.client.open(
+                '/api/integration/frontend-login',
+                method='OPTIONS',
+                headers={'Origin': self.origin}
+            )
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(response.headers.get('Access-Control-Allow-Origin'), self.origin)
+        self.assertEqual(response.headers.get('Access-Control-Allow-Credentials'), 'true')
+        self.assertIn('POST', response.headers.get('Access-Control-Allow-Methods', ''))
+        self.assertIn('OPTIONS', response.headers.get('Access-Control-Allow-Methods', ''))
+
+    def test_options_preflight_for_untrusted_origin_is_rejected(self):
+        manager = EmbedManager()
+        with self.manager_patch(manager):
+            response = self.client.open(
+                '/api/integration/frontend-login',
+                method='OPTIONS',
+                headers={'Origin': 'https://untrusted.example.com'}
+            )
+        self.assertEqual(response.status_code, 403)
+        self.assertIsNone(response.headers.get('Access-Control-Allow-Origin'))
+
+    def test_strict_origin_referer_fallback_when_origin_is_omitted(self):
+        manager = EmbedManager(origins=['http://192.168.0.237:8080'])
+        with self.manager_patch(manager):
+            response = self.client.post(
+                '/api/integration/frontend-login',
+                headers={
+                    'Referer': 'http://192.168.0.237:8080/peis/index.html',
+                },
+                json={'username': 'tester', 'password': 'correct'}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('Access-Control-Allow-Origin'), 'http://192.168.0.237:8080')
+        self.assertTrue(response.get_json()['authenticated'])
+
+    def test_same_host_cross_port_is_allowed(self):
+        # Server host is 192.168.0.237:6091, caller origin is 192.168.0.237:8080
+        manager = EmbedManager(origins=['http://something-else.com'])
+        with self.manager_patch(manager):
+            response = self.client.post(
+                '/api/integration/frontend-login',
+                headers={
+                    'Host': '192.168.0.237:6091',
+                    'Origin': 'http://192.168.0.237:8080',
+                },
+                json={'username': 'tester', 'password': 'correct'}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('Access-Control-Allow-Origin'), 'http://192.168.0.237:8080')
+        self.assertTrue(response.get_json()['authenticated'])
+
+    def test_wildcard_origin_allows_any_origin(self):
+        class WildcardManager(EmbedManager):
+            def get_integration_config(self):
+                cfg = super().get_integration_config()
+                cfg['frontend_embed_allow_all'] = True
+                return cfg
+
+        manager = WildcardManager()
+        with self.manager_patch(manager):
+            response = self.client.post(
+                '/api/integration/frontend-login',
+                headers={
+                    'Origin': 'http://any-hospital-workstation:9999',
+                },
+                json={'username': 'tester', 'password': 'correct'}
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get('Access-Control-Allow-Origin'), 'http://any-hospital-workstation:9999')
+
 
 if __name__ == '__main__':
     unittest.main()

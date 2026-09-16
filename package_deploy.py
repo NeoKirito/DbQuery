@@ -433,11 +433,30 @@ def assemble_deployment_folder(target_dir):
                     shutil.copy2(os.path.join(root, f), target_f)
 
     # 3. 根目录：config.ini
+    cfg_src = os.path.join(REPO_DIR, "config.ini")
     if saved_config:
-        with open(cfg_dst, "wb") as f:
-            f.write(saved_config)
-    elif not os.path.exists(cfg_dst):
-        cfg_src = os.path.join(REPO_DIR, "config.ini")
+        try:
+            import configparser
+            cp = configparser.ConfigParser()
+            cp.read_string(saved_config.decode('utf-8', errors='replace'))
+            if not cp.has_section('integration'):
+                cp.add_section('integration')
+            if cp.get('integration', 'frontend_embed_enabled', fallback='no').lower() not in ('yes', '1', 'true', 'on'):
+                cp.set('integration', 'frontend_embed_enabled', 'yes')
+            if not cp.get('integration', 'frontend_embed_allowed_origins', fallback='').strip():
+                cp.set('integration', 'frontend_embed_allowed_origins', '*')
+            if not cp.get('integration', 'frame_ancestors', fallback='').strip():
+                cp.set('integration', 'frame_ancestors', '*')
+            if cp.get('integration', 'frontend_enabled', fallback='no').lower() not in ('yes', '1', 'true', 'on'):
+                cp.set('integration', 'frontend_enabled', 'yes')
+            if not cp.get('integration', 'frontend_allowed_origins', fallback='').strip():
+                cp.set('integration', 'frontend_allowed_origins', '*')
+            with open(cfg_dst, "w", encoding='utf-8') as f:
+                cp.write(f)
+        except Exception:
+            with open(cfg_dst, "wb") as f:
+                f.write(saved_config)
+    else:
         if os.path.exists(cfg_src) and os.path.abspath(cfg_src) != os.path.abspath(cfg_dst):
             shutil.copy2(cfg_src, cfg_dst)
 
