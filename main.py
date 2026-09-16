@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QTabWidget, QLabel, QPushButton, QToolBar,
     QTreeWidget, QTreeWidgetItem, QMessageBox, QLineEdit,
-    QFrame, QSizePolicy, QAction, QTabBar
+    QFrame, QSizePolicy, QAction, QTabBar, QInputDialog
 )
 from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QIcon, QColor
@@ -130,11 +130,14 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        btn_new     = QPushButton(u"新建表单")
-        btn_refresh = QPushButton(u"刷新表单")
-        btn_new.clicked.connect(self._new_form)
+        btn_new       = QPushButton(u"新建表单")
+        btn_new_group = QPushButton(u"新建分组")
+        btn_refresh   = QPushButton(u"刷新表单")
+        btn_new.clicked.connect(lambda: self._new_form())
+        btn_new_group.clicked.connect(self._new_group)
         btn_refresh.clicked.connect(self._load_forms)
         tb.addWidget(btn_new)
+        tb.addWidget(btn_new_group)
         tb.addWidget(btn_refresh)
 
         # 右侧弹簧
@@ -271,67 +274,140 @@ class MainWindow(QMainWindow):
             self._test_connection(silent=False)
 
     # ════════════════════════════════════════
-    #  表单树管理
+    #  表单树与分组管理
     # ════════════════════════════════════════
     def _load_forms(self):
         self.forms_data = FormParser.load_forms_from_dir(FORMS_DIR)
         self._rebuild_tree(self.forms_data)
-        total = sum(len(v) for v in self.forms_data.values())
-        self.statusBar().showMessage(u"已加载 {} 个表单".format(total))
+        total_forms = sum(len(v) for v in self.forms_data.values())
+        total_groups = len(self.forms_data)
+        self.statusBar().showMessage(u"已加载 {} 个分组，共 {} 个表单".format(total_groups, total_forms))
 
     def _rebuild_tree(self, data, filter_text=''):
         self.form_tree.clear()
-        ft = filter_text.lower()
+        ft = filter_text.strip().lower()
 
         for group in sorted(data.keys()):
             forms = data[group]
+            matching_forms = [f for f in forms if not ft or ft in f.title.lower()]
+
+            # 搜索过滤：当有搜索词且既无匹配表单、分组名也不匹配搜索词时隐藏
+            if ft and not matching_forms and ft not in group.lower():
+                continue
+
             grp_item = QTreeWidgetItem([u"  " + group])
-            grp_item.setData(0, Qt.UserRole, None)
+            grp_item.setData(0, Qt.UserRole, None)  # None 表示分组项
+            grp_item.setData(0, Qt.UserRole + 1, group)
             grp_item.setForeground(0, QColor('#0055AA'))
             grp_item.setFont(0, QFont('', -1, QFont.Bold))
 
-            for form in forms:
-                if ft and ft not in form.title.lower():
-                    continue
-                child = QTreeWidgetItem([u"    " + form.title])
-                child.setData(0, Qt.UserRole, form)
-                child.setToolTip(0, form.description or form.file_path)
-                grp_item.addChild(child)
+            if matching_forms:
+                for form in matching_forms:
+                    child = QTreeWidgetItem([u"    " + form.title])
+                    child.setData(0, Qt.UserRole, form)
+                    child.setData(0, Qt.UserRole + 1, group)
+                    child.setToolTip(0, form.description or form.file_path)
+                    grp_item.addChild(child)
+            elif not ft:
+                # 空分组友好占位提示
+                placeholder = QTreeWidgetItem([u"    (空分组 - 双击新建表单)"])
+                placeholder.setData(0, Qt.UserRole, '__placeholder__')
+                placeholder.setData(0, Qt.UserRole + 1, group)
+                placeholder.setForeground(0, QColor('#909399'))
+                pfont = placeholder.font(0)
+                pfont.setItalic(True)
+                placeholder.setFont(0, pfont)
+                placeholder.setToolTip(0, u"该分组下暂无表单，双击或右键可在此分组下新建表单")
+                grp_item.addChild(placeholder)
 
-            if grp_item.childCount() > 0:
-                self.form_tree.addTopLevelItem(grp_item)
-                grp_item.setExpanded(True)
+            self.form_tree.addTopLevelItem(grp_item)
+            grp_item.setExpanded(True)
 
     def _do_filter_tree(self):
         self._rebuild_tree(self.forms_data, self.search_edit.text())
 
     def _on_tree_double_click(self, item, col):
-        form = item.data(0, Qt.UserRole)
-        if form:
-            self._open_form_tab(form)
+        if not item:
+            return
+        role = item.data(0, Qt.UserRole)
+        if role == '__placeholder__':
+            grp = item.data(0, Qt.UserRole + 1)
+            self._new_form(default_group=grp)
+            return
+        if isinstance(role, QueryForm):
+            self._open_form_tab(role)
 
     def _tree_context_menu(self, pos):
         from PyQt5.QtWidgets import QMenu
         item = self.form_tree.itemAt(pos)
-        if not item:
-            return
-        form = item.data(0, Qt.UserRole)
-        if not form:
-            return  # group item
-
         menu = QMenu(self)
-        a_open   = menu.addAction(u"打开查询")
-        a_edit   = menu.addAction(u"编辑表单")
-        menu.addSeparator()
-        a_delete = menu.addAction(u"删除表单")
 
-        act = menu.exec_(self.form_tree.viewport().mapToGlobal(pos))
-        if act == a_open:
-            self._open_form_tab(form)
-        elif act == a_edit:
-            self._edit_form_by_path(form)
-        elif act == a_delete:
-            self._delete_form(form)
+        if not item:
+            # 在空白区域点击
+            a_new_grp  = menu.addAction(u"新建分组")
+            a_new_form = menu.addAction(u"新建表单")
+            menu.addSeparator()
+            a_refresh  = menu.addAction(u"刷新表单列表")
+
+            act = menu.exec_(self.form_tree.viewport().mapToGlobal(pos))
+            if act == a_new_grp:
+                self._new_group()
+            elif act == a_new_form:
+                self._new_form()
+            elif act == a_refresh:
+                self._load_forms()
+            return
+
+        role = item.data(0, Qt.UserRole)
+        group_name = item.data(0, Qt.UserRole + 1)
+
+        if role is None or role == '__placeholder__':
+            # 点击了分组项或占位符
+            grp = group_name or '默认'
+            a_new_form = menu.addAction(u"在「{}」下新建表单".format(grp))
+            a_new_form.setFont(QFont('', -1, QFont.Bold))
+            a_new_grp  = menu.addAction(u"新建分组")
+            menu.addSeparator()
+            a_rename   = menu.addAction(u"重命名分组")
+            a_del_grp  = menu.addAction(u"删除分组")
+            menu.addSeparator()
+            a_open_dir = menu.addAction(u"打开分组所在目录")
+
+            act = menu.exec_(self.form_tree.viewport().mapToGlobal(pos))
+            if act == a_new_form:
+                self._new_form(default_group=grp)
+            elif act == a_new_grp:
+                self._new_group()
+            elif act == a_rename:
+                self._rename_group(grp)
+            elif act == a_del_grp:
+                self._delete_group(grp)
+            elif act == a_open_dir:
+                self._open_group_in_explorer(grp)
+            return
+
+        if isinstance(role, QueryForm):
+            form = role
+            a_open     = menu.addAction(u"打开查询")
+            a_open.setFont(QFont('', -1, QFont.Bold))
+            a_edit     = menu.addAction(u"编辑表单")
+            a_new_form = menu.addAction(u"在「{}」下新建表单".format(form.group))
+            menu.addSeparator()
+            a_delete   = menu.addAction(u"删除表单")
+            menu.addSeparator()
+            a_open_dir = menu.addAction(u"打开表单所在目录")
+
+            act = menu.exec_(self.form_tree.viewport().mapToGlobal(pos))
+            if act == a_open:
+                self._open_form_tab(form)
+            elif act == a_edit:
+                self._edit_form_by_path(form)
+            elif act == a_new_form:
+                self._new_form(default_group=form.group)
+            elif act == a_delete:
+                self._delete_form(form)
+            elif act == a_open_dir:
+                self._open_group_in_explorer(form.group)
 
     # ════════════════════════════════════════
     #  标签页管理
@@ -379,19 +455,139 @@ class MainWindow(QMainWindow):
                 break
         # 重新打开
         try:
-            new_form = FormParser.parse_file(file_path)
+            new_form = FormParser.parse_file(file_path, forms_root=FORMS_DIR)
             self._open_form_tab(new_form)
         except Exception as e:
             QMessageBox.warning(self, u"重载失败",
                                 u"重新加载表单失败：\n{}".format(e))
 
     # ════════════════════════════════════════
-    #  表单 CRUD
+    #  表单与分组 CRUD
     # ════════════════════════════════════════
-    def _new_form(self):
-        dlg = FormEditorDialog(None, FORMS_DIR, self)
+    def _new_form(self, default_group=None):
+        if default_group is None:
+            curr = self.form_tree.currentItem()
+            if curr:
+                grp = curr.data(0, Qt.UserRole + 1)
+                if grp:
+                    default_group = grp
+        dlg = FormEditorDialog(None, FORMS_DIR, parent=self, default_group=default_group)
         if dlg.exec_():
             self._load_forms()
+            target_group = getattr(dlg, 'default_group', None)
+            if target_group:
+                self._select_group_in_tree(target_group)
+
+    def _new_group(self):
+        group_name, ok = QInputDialog.getText(
+            self, u"新建分组", u"请输入新分组名称（将作为 forms 子目录）："
+        )
+        if not ok:
+            return
+        group_name = group_name.strip()
+        if not group_name:
+            QMessageBox.warning(self, u"提示", u"分组名称不能为空！")
+            return
+        import re
+        if re.search(r'[\\/:*?"<>|]', group_name):
+            QMessageBox.warning(self, u"提示", u'分组名称不能包含以下特殊字符：\n\\ / : * ? " < > |')
+            return
+        group_dir = os.path.join(FORMS_DIR, group_name)
+        if os.path.exists(group_dir):
+            QMessageBox.information(self, u"提示", u"分组「{}」已存在！".format(group_name))
+            self._select_group_in_tree(group_name)
+            return
+        try:
+            os.makedirs(group_dir, exist_ok=True)
+            self._load_forms()
+            self._select_group_in_tree(group_name)
+            self.statusBar().showMessage(u"新建分组「{}」成功".format(group_name), 4000)
+            reply = QMessageBox.question(
+                self, u"新建分组成功",
+                u"分组「{}」已成功创建。\n是否立即在该分组下新建表单？".format(group_name),
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply == QMessageBox.Yes:
+                self._new_form(default_group=group_name)
+        except Exception as e:
+            QMessageBox.critical(self, u"创建分组失败", str(e))
+
+    def _rename_group(self, old_group):
+        new_group, ok = QInputDialog.getText(
+            self, u"重命名分组",
+            u"请输入分组「{}」的新名称：".format(old_group),
+            text=old_group
+        )
+        if not ok or not new_group.strip() or new_group.strip() == old_group:
+            return
+        new_group = new_group.strip()
+        import re
+        if re.search(r'[\\/:*?"<>|]', new_group):
+            QMessageBox.warning(self, u"提示", u'分组名称不能包含以下特殊字符：\n\\ / : * ? " < > |')
+            return
+        old_dir = os.path.join(FORMS_DIR, old_group)
+        new_dir = os.path.join(FORMS_DIR, new_group)
+        if os.path.exists(new_dir):
+            QMessageBox.warning(self, u"提示", u"目标分组「{}」已存在！".format(new_group))
+            return
+        try:
+            os.rename(old_dir, new_dir)
+            self._load_forms()
+            self._select_group_in_tree(new_group)
+            self.statusBar().showMessage(u"分组已重命名为「{}」".format(new_group), 4000)
+        except Exception as e:
+            QMessageBox.critical(self, u"重命名失败", str(e))
+
+    def _delete_group(self, group_name):
+        group_dir = os.path.join(FORMS_DIR, group_name)
+        if not os.path.exists(group_dir):
+            return
+        files = [f for f in os.listdir(group_dir) if os.path.isfile(os.path.join(group_dir, f))]
+        if files:
+            reply = QMessageBox.question(
+                self, u"确认删除分组",
+                u"分组「{}」下包含 {} 个文件。\n确定要永久删除该分组及其全部表单吗？".format(group_name, len(files)),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+        else:
+            reply = QMessageBox.question(
+                self, u"确认删除分组",
+                u"确定要删除空分组「{}」吗？".format(group_name),
+                QMessageBox.Yes | QMessageBox.No
+            )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            import shutil
+            shutil.rmtree(group_dir)
+            self._load_forms()
+            # 关闭已打开的属于该分组的 tab
+            for i in range(self.tab_widget.count() - 1, -1, -1):
+                w = self.tab_widget.widget(i)
+                if isinstance(w, QueryTab) and getattr(w.form, 'group', '') == group_name:
+                    self.tab_widget.removeTab(i)
+            self.statusBar().showMessage(u"分组「{}」已删除".format(group_name), 4000)
+        except Exception as e:
+            QMessageBox.critical(self, u"删除分组失败", str(e))
+
+    def _open_group_in_explorer(self, group_name):
+        group_dir = os.path.join(FORMS_DIR, group_name)
+        if not os.path.exists(group_dir):
+            group_dir = FORMS_DIR
+        import subprocess
+        try:
+            os.startfile(group_dir)
+        except Exception:
+            subprocess.Popen(['explorer', group_dir])
+
+    def _select_group_in_tree(self, group_name):
+        for i in range(self.form_tree.topLevelItemCount()):
+            top = self.form_tree.topLevelItem(i)
+            if top.data(0, Qt.UserRole + 1) == group_name:
+                self.form_tree.setCurrentItem(top)
+                top.setExpanded(True)
+                self.form_tree.scrollToItem(top)
+                break
 
     def _edit_form_by_path(self, form):
         dlg = FormEditorDialog(form, FORMS_DIR, self)

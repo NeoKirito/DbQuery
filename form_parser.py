@@ -196,13 +196,40 @@ class FormParser:
         return default, placeholder, required, width, options_sql, searchable, allow_custom
 
     @staticmethod
-    def parse_file(file_path):
+    def get_group_from_path(file_path, forms_root=None):
+        """根据文件所在路径推断其所属的分组名称。
+        
+        1. 若提供 forms_root，则根据相对于 forms_root 的相对路径提取直接子目录；
+        2. 否则向上追溯路径，若其直接父目录的上级目录名为 'forms'，则以该直接父目录为分组；
+        3. 若文件直接位于 forms 根目录或非 forms 目录结构，返回 None。
+        """
+        if forms_root:
+            try:
+                rel = os.path.relpath(file_path, forms_root)
+                parts = rel.replace(os.sep, '/').split('/')
+                if len(parts) > 1 and parts[0] not in ('.', '..'):
+                    return parts[0]
+            except Exception:
+                pass
+
+        norm = os.path.abspath(file_path)
+        parent = os.path.dirname(norm)
+        while parent and os.path.dirname(parent) != parent:
+            grand = os.path.dirname(parent)
+            if os.path.basename(grand).lower() == 'forms':
+                return os.path.basename(parent)
+            parent = grand
+        return None
+
+    @staticmethod
+    def parse_file(file_path, forms_root=None):
         form = QueryForm()
         form.file_path = file_path
 
         with open(file_path, 'r', encoding='utf-8-sig') as form_file:
             content = form_file.read()
 
+        meta_group = ''
         for line in FormParser._get_section(content, 'meta').splitlines():
             line = line.strip()
             if not line or line.startswith('#') or line.startswith(';'):
@@ -216,7 +243,7 @@ class FormParser:
                 elif key == 'description':
                     form.description = value
                 elif key == 'group':
-                    form.group = value
+                    meta_group = value
                 elif key == 'type':
                     form.query_type = value.lower().strip()
                 elif key == 'web_enabled':
@@ -224,9 +251,18 @@ class FormParser:
 
         if not form.title:
             form.title = os.path.splitext(os.path.basename(file_path))[0]
-        if not form.group:
-            parent_dir = os.path.basename(os.path.dirname(file_path))
-            form.group = parent_dir if parent_dir.lower() != 'forms' else '默认'
+
+        # 分组判定优先级：
+        # 1. 物理目录结构优先：若文件位于 forms 的子目录中，以该子目录名作为分组（彻底消除模板/复制文件残留 group=默认 的问题）；
+        # 2. 根目录文件或独立文件：以 [meta] 中的 group 为准；
+        # 3. 兜底为 '默认'。
+        folder_group = FormParser.get_group_from_path(file_path, forms_root=forms_root)
+        if folder_group:
+            form.group = folder_group
+        elif meta_group:
+            form.group = meta_group
+        else:
+            form.group = '默认'
 
         for line in FormParser._get_section(content, 'params').splitlines():
             line = line.strip()
@@ -300,9 +336,21 @@ class FormParser:
 
     @staticmethod
     def load_forms_from_dir(forms_dir):
-        """扫描 forms_dir 及其子目录中所有 .qry 文件，按分组返回。"""
+        """扫描 forms_dir 及其子目录中所有 .qry 文件，按分组返回。
+        
+        1. 预先注册 forms_dir 下的所有直接子目录（包括空目录），确保新建分组在界面中立即可见；
+        2. 扫描所有 .qry 文件，严格依据所在子目录或 [meta] 归组；
+        3. 按分组名排序返回。
+        """
         result = {}
         FormParser.ensure_forms_dir(forms_dir)
+
+        # 收集 forms_dir 下所有直接子目录作为已知分组（包含空分组）
+        if os.path.isdir(forms_dir):
+            for name in sorted(os.listdir(forms_dir)):
+                full = os.path.join(forms_dir, name)
+                if os.path.isdir(full) and not name.startswith(('.', '_')):
+                    result.setdefault(name, [])
 
         for root, dirs, files in os.walk(forms_dir):
             dirs.sort()
@@ -311,7 +359,7 @@ class FormParser:
                     continue
                 path = os.path.join(root, filename)
                 try:
-                    form = FormParser.parse_file(path)
+                    form = FormParser.parse_file(path, forms_root=forms_dir)
                     group = form.group or '默认'
                     result.setdefault(group, []).append(form)
                 except Exception as exc:

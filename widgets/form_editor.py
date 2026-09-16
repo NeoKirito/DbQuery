@@ -8,7 +8,7 @@ import re
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QPlainTextEdit, QGroupBox, QFormLayout, QCheckBox,
-    QMessageBox, QFileDialog, QSizePolicy
+    QMessageBox, QFileDialog, QSizePolicy, QComboBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import (
@@ -89,14 +89,16 @@ class QryHighlighter(QSyntaxHighlighter):
 # ──────────────────────────────────────────────
 class FormEditorDialog(QDialog):
 
-    def __init__(self, form, forms_dir, parent=None):
+    def __init__(self, form, forms_dir, parent=None, default_group=None):
         """
-        form      : QueryForm（编辑已有表单）或 None（新建）
-        forms_dir : forms 根目录路径
+        form          : QueryForm（编辑已有表单）或 None（新建）
+        forms_dir     : forms 根目录路径
+        default_group : 预选分组名称（新建表单时）
         """
         super(FormEditorDialog, self).__init__(parent)
-        self.form      = form
-        self.forms_dir = forms_dir
+        self.form          = form
+        self.forms_dir     = forms_dir
+        self.default_group = default_group or (form.group if form else '默认')
         self.setWindowTitle("编辑表单" if form else "新建表单")
         self.setMinimumSize(720, 600)
         self.resize(840, 680)
@@ -104,7 +106,8 @@ class FormEditorDialog(QDialog):
         if form:
             self._load_form_file()
         else:
-            self.editor.setPlainText(TEMPLATE)
+            init_text = TEMPLATE.replace('group = 默认', 'group = {}'.format(self.default_group))
+            self.editor.setPlainText(init_text)
 
     # ── UI 初始化 ──────────────────────────────
     def _setup_ui(self):
@@ -131,14 +134,34 @@ class FormEditorDialog(QDialog):
             loc_form = QFormLayout(loc_grp)
             loc_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-            self.group_edit = QLineEdit()
-            self.group_edit.setPlaceholderText("分组名称（同时作为子目录），如：销售管理")
+            self.group_combo = QComboBox()
+            self.group_combo.setEditable(True)
+            self.group_combo.setInsertPolicy(QComboBox.NoInsert)
+            self.group_combo.setToolTip("可直接选择已有分组，或手动输入新分组名称（保存时将自动创建目录）")
+
+            existing_groups = []
+            if os.path.isdir(self.forms_dir):
+                for name in sorted(os.listdir(self.forms_dir)):
+                    full = os.path.join(self.forms_dir, name)
+                    if os.path.isdir(full) and not name.startswith(('.', '_')):
+                        existing_groups.append(name)
+            if not existing_groups:
+                existing_groups = ['默认']
+            self.group_combo.addItems(existing_groups)
+
+            idx = self.group_combo.findText(self.default_group)
+            if idx >= 0:
+                self.group_combo.setCurrentIndex(idx)
+            else:
+                self.group_combo.setEditText(self.default_group)
+
+            self.group_combo.currentTextChanged.connect(self._on_group_combo_changed)
 
             self.filename_edit = QLineEdit()
             self.filename_edit.setPlaceholderText("文件名（不含 .qry 扩展名）")
 
-            loc_form.addRow("分组目录:", self.group_edit)
-            loc_form.addRow("文件名:", self.filename_edit)
+            loc_form.addRow("所属分组:", self.group_combo)
+            loc_form.addRow("文件名称:", self.filename_edit)
             layout.addWidget(loc_grp)
 
         access_row = QHBoxLayout()
@@ -211,6 +234,36 @@ class FormEditorDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "读取失败", "无法读取文件：\n{}".format(e))
 
+    def _on_group_combo_changed(self, new_group):
+        """当用户切换或修改所属分组时，同步更新编辑器 [meta] 中的 group 属性"""
+        if self.form:
+            return
+        new_group = new_group.strip() or '默认'
+        content = self.editor.toPlainText()
+        updated = self._apply_group(content, new_group)
+        if updated != content:
+            cursor = self.editor.textCursor()
+            pos = cursor.position()
+            self.editor.setPlainText(updated)
+            cursor.setPosition(min(pos, len(updated)))
+            self.editor.setTextCursor(cursor)
+
+    def _apply_group(self, content, group_name):
+        """确保将 group 安全写入 [meta]，保持其他元数据和旧格式。"""
+        meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content,
+                           re.DOTALL | re.IGNORECASE)
+        if not meta_m:
+            return content
+
+        meta_body = meta_m.group(1)
+        grp_line = re.compile(r'^\s*group\s*=.*$', re.MULTILINE | re.IGNORECASE)
+        if grp_line.search(meta_body):
+            meta_body = grp_line.sub('group = ' + group_name, meta_body)
+        else:
+            meta_body = meta_body.rstrip() + '\ngroup = ' + group_name + '\n'
+        start, end = meta_m.span(1)
+        return content[:start] + meta_body + content[end:]
+
     def _apply_web_enabled(self, content):
         """将可视开关安全写入 [meta]，保留其他元数据和旧格式。"""
         meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content,
@@ -231,9 +284,32 @@ class FormEditorDialog(QDialog):
     def _get_save_path(self):
         """获取保存路径；返回 None 表示用户取消或输入无效"""
         if self.form:
+            # 如果是编辑已有表单，检查 [meta] 中的 group 是否被修改
+            content = self.editor.toPlainText()
+            meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content,
+                               re.DOTALL | re.IGNORECASE)
+            target_group = self.form.group or '默认'
+            if meta_m:
+                for line in meta_m.group(1).splitlines():
+                    line = line.strip()
+                    if line.startswith(('#', ';')):
+                        continue
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        if k.strip().lower() == 'group' and v.strip():
+                            target_group = v.strip()
+                            break
+            
+            target_group = re.sub(r'[\\/:*?"<>|]', '_', target_group)
+            current_dir_name = os.path.basename(os.path.dirname(self.form.file_path))
+            if current_dir_name.lower() != 'forms' and target_group != current_dir_name:
+                # 分组被修改，需要移动到新分组目录
+                new_dir = os.path.join(self.forms_dir, target_group)
+                os.makedirs(new_dir, exist_ok=True)
+                return os.path.join(new_dir, os.path.basename(self.form.file_path))
             return self.form.file_path
 
-        group = self.group_edit.text().strip() or '默认'
+        group = self.group_combo.currentText().strip() or '默认'
         name  = self.filename_edit.text().strip()
 
         if not name:
@@ -262,7 +338,14 @@ class FormEditorDialog(QDialog):
 
     def _do_save(self, path):
         """执行实际写入"""
-        content = self._apply_web_enabled(self.editor.toPlainText())
+        # 根据实际保存路径的目录推断并规范化 group
+        folder_group = os.path.basename(os.path.dirname(path))
+        if folder_group.lower() == 'forms':
+            folder_group = (self.group_combo.currentText().strip() if not self.form else '默认') or '默认'
+
+        raw_content = self.editor.toPlainText()
+        content = self._apply_group(raw_content, folder_group)
+        content = self._apply_web_enabled(content)
 
         # 提取 query_type（从 [meta] 段的 type 字段）
         query_type = 'select'
@@ -316,6 +399,17 @@ class FormEditorDialog(QDialog):
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
             self.editor.setPlainText(content)
+
+            # 如果已有表单保存到了新路径（如修改了分组），移除旧位置文件
+            if self.form and self.form.file_path and os.path.abspath(path) != os.path.abspath(self.form.file_path):
+                try:
+                    if os.path.exists(self.form.file_path):
+                        os.remove(self.form.file_path)
+                except Exception:
+                    pass
+                self.form.file_path = path
+                self.form.group = folder_group
+
             return True
         except Exception as e:
             QMessageBox.critical(self, "保存失败", str(e))
@@ -331,9 +425,10 @@ class FormEditorDialog(QDialog):
             self.accept()
 
     def _save_as(self):
+        default_dir = os.path.join(self.forms_dir, self.form.group or '默认') if self.form else self.forms_dir
         default = os.path.join(
-            self.forms_dir,
-            os.path.basename(self.form.file_path)
+            default_dir,
+            os.path.basename(self.form.file_path if self.form else 'new_form.qry')
         )
         path, _ = QFileDialog.getSaveFileName(
             self, "另存为", default,
