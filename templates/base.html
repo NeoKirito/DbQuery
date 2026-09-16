@@ -19,6 +19,57 @@
     <main class="app-body" aria-label="综合查询内容区">
         {% block content %}{% endblock %}
     </main>
+    {% if page_name|default('app') != 'login' %}
+    <div id="drawer-backdrop" class="drawer-backdrop" onclick="DrawerManager.close()"></div>
+    <aside id="floating-drawer" class="floating-drawer" aria-label="快捷报表抽屉" aria-hidden="true">
+        <div class="drawer-header">
+            <div class="drawer-title">
+                <svg class="icon drawer-title-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                <span>报表清单</span>
+                <span class="drawer-count-badge" id="drawer-forms-count">{% if forms_data %}{{ forms_data.values()|map('length')|sum }} 个{% endif %}</span>
+            </div>
+            <button type="button" class="drawer-close-btn" onclick="DrawerManager.close()" aria-label="关闭报表抽屉" title="关闭 (Esc)">
+                <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="drawer-search-box">
+            <div class="drawer-search-wrapper">
+                <svg class="icon drawer-search-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                <input type="search" id="drawer-search-input" class="drawer-search-input" placeholder="输入报表名称筛选..." oninput="DrawerManager.filter(this.value)" autocomplete="off">
+                <button type="button" id="drawer-search-clear" class="drawer-search-clear d-none" onclick="DrawerManager.clearFilter()" aria-label="清空搜索" title="清空搜索">
+                    <svg class="icon" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+        <div class="drawer-body" id="drawer-tree">
+            {% if forms_data %}
+            {% for group, forms in forms_data.items() %}
+            <div class="drawer-group">
+                <div class="drawer-group-title">
+                    <span class="drawer-group-arrow" aria-hidden="true">▾</span>
+                    <span class="drawer-group-name">{{ group }}</span>
+                    <span class="drawer-group-count">{{ forms|length }} 个</span>
+                </div>
+                <div class="drawer-group-items">
+                    {% for form in forms %}
+                    <a class="drawer-item" href="javascript:void(0);" data-file-path="{{ form.file_path }}" data-title="{{ form.title|lower }}" title="{{ form.title }}">
+                        <svg class="icon drawer-item-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                        <div class="drawer-item-info">
+                            <span class="drawer-item-title">{{ form.title }}</span>
+                            {% if form.description %}<span class="drawer-item-desc">{{ form.description }}</span>{% endif %}
+                        </div>
+                        <span class="drawer-item-status d-none" data-fp="{{ form.file_path }}">已打开</span>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="compact-empty-state">正在加载报表列表…</div>
+            {% endif %}
+        </div>
+    </aside>
+    {% endif %}
     <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
     {% if page_name|default('app') != 'login' %}
     <script>

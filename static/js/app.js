@@ -180,6 +180,10 @@ var TabManager = {
             $('.nav-item-link').removeClass('active');
             $('#project-switcher-trigger .project-switcher-current').text('综合查询');
         }
+
+        if (window.DrawerManager) {
+            DrawerManager.highlightActiveTab();
+        }
     },
 
     closeTab: function (tabId) {
@@ -207,6 +211,8 @@ var TabManager = {
 
         if (this.activeTabId === tabId) {
             this.activateTab(nextTabId);
+        } else if (window.DrawerManager) {
+            DrawerManager.highlightActiveTab();
         }
     },
 
@@ -243,6 +249,7 @@ var TabManager = {
     },
 
     cacheFormsData: function (data) {
+        this.rawFormsData = data;
         this.formsCache = {};
         for (var group in data) {
             if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
@@ -373,6 +380,237 @@ var TabManager = {
     }
 };
 
+/* ════════════════════════════════════════════════════════════════════════════
+   报表拼音首字母检索辅助函数（纯前端无依赖，基于 zh-Hans-CN localeCompare）
+   ════════════════════════════════════════════════════════════════════════════ */
+function getPinyinFirstLetter(str) {
+    if (!str) return '';
+    var dict = {'a': '吖', 'b': '八', 'c': '嚓', 'd': '咑', 'e': '妸', 'f': '发', 'g': '旮', 'h': '哈', 'j': '丌', 'k': '咔', 'l': '垃', 'm': '妈', 'n': '拿', 'o': '噢', 'p': '妑', 'q': '七', 'r': '呥', 's': '仨', 't': '他', 'w': '屲', 'x': '夕', 'y': '丫', 'z': '帀'};
+    var res = '';
+    for (var i = 0; i < str.length; i++) {
+        var ch = str[i];
+        if (/[a-zA-Z0-9]/.test(ch)) { res += ch.toLowerCase(); continue; }
+        if (!/[\u4e00-\u9fa5]/.test(ch)) continue;
+        var found = '';
+        var letters = ['z','y','x','w','t','s','r','q','p','o','n','m','l','k','j','h','g','f','e','d','c','b','a'];
+        for (var j = 0; j < letters.length; j++) {
+            if (ch.localeCompare(dict[letters[j]], 'zh-Hans-CN') >= 0) {
+                found = letters[j];
+                break;
+            }
+        }
+        res += (found || '');
+    }
+    return res;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   DrawerManager：快捷报表抽屉控制器（平滑滑出/收起，搜索，分组，选报表自动缩小收起）
+   ════════════════════════════════════════════════════════════════════════════ */
+var DrawerManager = {
+    formsData: null,
+    isOpen: false,
+
+    init: function () {
+        var self = this;
+        var $drawer = $('#floating-drawer');
+        var $backdrop = $('#drawer-backdrop');
+        if (!$drawer.length) return;
+
+        // Esc 快捷键收起抽屉
+        $(document).on('keydown', function (e) {
+            if (e.key === 'Escape' && self.isOpen) {
+                self.close();
+            }
+        });
+
+        // 监听抽屉内列表项点击：打开对应报表并自动收起抽屉
+        $drawer.on('click', '.drawer-item', function (e) {
+            e.preventDefault();
+            var filePath = $(this).data('filePath');
+            if (filePath && window.TabManager) {
+                TabManager.openReport(filePath);
+                self.close();
+            }
+        });
+
+        // 抽屉内分组折叠展开
+        $drawer.on('click', '.drawer-group-title', function () {
+            $(this).closest('.drawer-group').toggleClass('collapsed');
+        });
+
+        // 支持 URL 参数 drawer=1 自动展开（便于测试与直达）
+        try {
+            if (new URLSearchParams(window.location.search).get('drawer') === '1') {
+                $drawer.css('transition', 'none');
+                self.open();
+            }
+        } catch (ignore) {}
+    },
+
+    toggle: function () {
+        if (this.isOpen) {
+            this.close();
+        } else {
+            this.open();
+        }
+    },
+
+    open: function () {
+        var self = this;
+        var $drawer = $('#floating-drawer');
+        var $backdrop = $('#drawer-backdrop');
+        var $toggleBtn = $('#drawer-toggle-btn');
+        if (!$drawer.length) return;
+
+        self.isOpen = true;
+        $drawer.addClass('active').attr('aria-hidden', 'false');
+        $backdrop.addClass('active');
+        $toggleBtn.addClass('active').attr('aria-expanded', 'true');
+
+        // 如果尚未渲染过数据，先加载或使用已缓存的表单数据
+        if (!self.formsData) {
+            if (window.TabManager && window.TabManager.rawFormsData) {
+                self.render(window.TabManager.rawFormsData);
+            } else {
+                $.get(apiPath('/api/forms'), function (data) {
+                    if (window.TabManager) TabManager.cacheFormsData(data);
+                    self.render(data);
+                });
+            }
+        } else {
+            self.highlightActiveTab();
+        }
+
+        // 自动聚焦搜索框，提升效率
+        window.setTimeout(function () {
+            $('#drawer-search-input').trigger('focus');
+        }, 150);
+    },
+
+    close: function () {
+        this.isOpen = false;
+        $('#floating-drawer').removeClass('active').attr('aria-hidden', 'true');
+        $('#drawer-backdrop').removeClass('active');
+        $('#drawer-toggle-btn').removeClass('active').attr('aria-expanded', 'false');
+    },
+
+    render: function (data) {
+        this.formsData = data || {};
+        var $tree = $('#drawer-tree');
+        var totalCount = 0;
+        var html = '';
+
+        for (var group in data) {
+            if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
+            var forms = data[group] || [];
+            totalCount += forms.length;
+            html += '<div class="drawer-group">';
+            html += '<div class="drawer-group-title">';
+            html += '<span class="drawer-group-arrow" aria-hidden="true">▾</span>';
+            html += '<span class="drawer-group-name">' + esc(group) + '</span>';
+            html += '<span class="drawer-group-count">' + forms.length + ' 个</span>';
+            html += '</div>';
+            html += '<div class="drawer-group-items">';
+
+            for (var i = 0; i < forms.length; i++) {
+                var form = forms[i];
+                var fp = form.file_path || '';
+                var isHasDesc = Boolean(form.description);
+                var pinyinFirst = getPinyinFirstLetter(form.title || '');
+                html += '<a class="drawer-item" href="javascript:void(0);" data-file-path="' + esc(fp) + '" data-title="' + esc(form.title.toLowerCase()) + '" data-pinyin="' + esc(pinyinFirst) + '" title="' + esc(form.title) + '">';
+                html += '<svg class="icon drawer-item-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+                html += '<div class="drawer-item-info">';
+                html += '<span class="drawer-item-title">' + esc(form.title) + '</span>';
+                if (isHasDesc) {
+                    html += '<span class="drawer-item-desc">' + esc(form.description) + '</span>';
+                }
+                html += '</div>';
+                html += '<span class="drawer-item-status d-none" data-fp="' + esc(fp) + '">已打开</span>';
+                html += '</a>';
+            }
+            html += '</div></div>';
+        }
+
+        if (!totalCount) {
+            html = '<div class="drawer-empty-search">暂无可用的 Web 报表</div>';
+        }
+
+        $tree.html(html);
+        $('#drawer-forms-count').text(totalCount ? (totalCount + ' 个') : '');
+        this.highlightActiveTab();
+    },
+
+    highlightActiveTab: function () {
+        var activeTab = window.TabManager ? TabManager.getActiveTab() : null;
+        var activeFp = activeTab ? (activeTab.filePath || '') : '';
+        var normActiveFp = String(activeFp).replace(/\\/g, '/');
+
+        var openFps = {};
+        if (window.TabManager && window.TabManager.tabs) {
+            for (var tid in TabManager.tabs) {
+                var tab = TabManager.tabs[tid];
+                if (tab.filePath) {
+                    openFps[String(tab.filePath).replace(/\\/g, '/')] = true;
+                }
+            }
+        }
+
+        $('#drawer-tree .drawer-item').each(function () {
+            var $item = $(this);
+            var itemFp = String($item.data('filePath') || '').replace(/\\/g, '/');
+            var isCurrentActive = normActiveFp && itemFp === normActiveFp;
+            var isAlreadyOpen = openFps[itemFp];
+
+            $item.toggleClass('active', Boolean(isCurrentActive));
+            $item.find('.drawer-item-status').toggleClass('d-none', !isAlreadyOpen);
+        });
+    },
+
+    filter: function (keyword) {
+        var text = String(keyword || '').trim().toLowerCase();
+        var $wrapper = $('#drawer-search-input').closest('.drawer-search-wrapper');
+        $wrapper.find('.drawer-search-clear').toggleClass('d-none', !text);
+
+        var matchCount = 0;
+        $('#drawer-tree .drawer-group').each(function () {
+            var $grp = $(this);
+            var grpMatches = 0;
+            $grp.find('.drawer-item').each(function () {
+                var $item = $(this);
+                var title = String($item.data('title') || '');
+                var pinyin = String($item.data('pinyin') || '');
+                var desc = String($item.find('.drawer-item-desc').text() || '').toLowerCase();
+                var matched = !text || title.indexOf(text) >= 0 || desc.indexOf(text) >= 0 || (pinyin && pinyin.indexOf(text) >= 0);
+                $item.toggle(matched);
+                if (matched) grpMatches++;
+            });
+            $grp.toggle(grpMatches > 0);
+            if (text && grpMatches > 0) {
+                $grp.removeClass('collapsed').find('.drawer-group-items').show();
+            }
+            matchCount += grpMatches;
+        });
+
+        var $empty = $('#drawer-search-empty');
+        if (text && matchCount === 0) {
+            if (!$empty.length) {
+                $('#drawer-tree').append('<div class="drawer-empty-search" id="drawer-search-empty">未搜索到匹配的报表</div>');
+            } else {
+                $empty.show();
+            }
+        } else {
+            $empty.remove();
+        }
+    },
+
+    clearFilter: function () {
+        $('#drawer-search-input').val('');
+        this.filter('');
+        $('#drawer-search-input').trigger('focus');
+    }
+};
+
 function renderParamHtml(p, tabId, loopIndex) {
     var fieldId = 'param-' + tabId + '-' + loopIndex;
     var rawDef = p.raw_default !== undefined ? p.raw_default : (p.default || '');
@@ -465,6 +703,7 @@ function filterDynamicProjectSwitcher(input) {
    ════════════════════════════════════════════════════════════════════════════ */
 $(document).ready(function () {
     TabManager.init();
+    DrawerManager.init();
     initializeDefaultValues();
     initializeSearchableSelects();
     loadDynamicSelectOptions();
@@ -684,6 +923,9 @@ function loadFormTree() {
         if ($('#welcome-quick-links').length) {
             $('#welcome-quick-links').html(buildWelcomeCards(data));
         }
+        if (window.DrawerManager) {
+            DrawerManager.render(data);
+        }
     }).fail(function () {
         showToast('查询项目加载失败，请稍后刷新页面。', 'error');
     });
@@ -787,7 +1029,12 @@ function filterFormTree(value, $tree) {
     var text = (value || '').toLowerCase();
     $tree.find('.nav-item-link').each(function () {
         var title = $(this).data('title') || '';
-        $(this).toggle(!text || title.indexOf(text) >= 0);
+        var pinyin = $(this).data('pinyin');
+        if (pinyin === undefined) {
+            pinyin = getPinyinFirstLetter(title);
+            $(this).data('pinyin', pinyin);
+        }
+        $(this).toggle(!text || title.indexOf(text) >= 0 || (pinyin && pinyin.indexOf(text) >= 0));
     });
     $tree.find('.nav-group').each(function () {
         var $group = $(this);

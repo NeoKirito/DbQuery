@@ -47,8 +47,14 @@ setlocal EnableExtensions
 title DBQuery Web 服务
 cd /d "%~dp0"
 
-:: 默认服务端口
-set "WEB_PORT=8094"
+:: 默认服务端口（优先传参 %1，其次从 config.ini 读取，缺省为 6091）
+set "WEB_PORT=6091"
+if not "%~1"=="" (
+    set "WEB_PORT=%~1"
+) else if exist "%~dp0config.ini" (
+    for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "try { $c=Get-Content '%~dp0config.ini' -Raw; if ($c -match '(?ms)\\[web\\][^\\[]*^\\s*port\\s*=\\s*(\\d+)') { $matches[1] } else { '6091' } } catch { '6091' }"`) do set "WEB_PORT=%%p"
+)
+if "%WEB_PORT%"=="" set "WEB_PORT=6091"
 
 if exist "%~dp0dist\\DBQuery.exe" (
     set "EXE_PATH=%~dp0dist\\DBQuery.exe"
@@ -66,7 +72,7 @@ set "DBQUERY_TRUST_PROXY_PREFIX=true"
 net session >nul 2>&1
 if errorlevel 1 (
     echo 正在申请管理员权限以配置 Windows 防火墙并启动服务...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%WEB_PORT%' -Verb RunAs"
     exit /b
 )
 
@@ -80,6 +86,10 @@ if not exist "%EXE_PATH%" (
     pause
     exit /b 1
 )
+
+:: 检查并停止已在运行的 Web 服务实例（避免端口被旧进程占用）
+echo 检查并停止旧版 Web 服务实例...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); foreach($target in $targets){ Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500"
 
 :: 配置 Windows 防火墙入站规则
 echo 正在配置 Windows 防火墙入站规则...
@@ -103,6 +113,7 @@ for /f "tokens=4" %%a in ('route print -4 ^| findstr /R /C:"^[ ]*0\\.0\\.0\\.0[ 
 echo.
 echo   本机访问: http://localhost:%WEB_PORT%/
 echo   局域网:   http://%L_IP%:%WEB_PORT%/
+echo   API 接口: http://%L_IP%:%WEB_PORT%/api/integration/frontend-login
 echo.
 echo   提示: 嵌入模式可在 URL 附加 ?hide_header=1 或 ?embed=1
 echo ================================================
@@ -120,7 +131,13 @@ setlocal EnableExtensions
 title DBQuery Web Server
 cd /d "%~dp0"
 
-set "WEB_PORT=8094"
+set "WEB_PORT=6091"
+if not "%~1"=="" (
+    set "WEB_PORT=%~1"
+) else if exist "%~dp0config.ini" (
+    for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "try { $c=Get-Content '%~dp0config.ini' -Raw; if ($c -match '(?ms)\\[web\\][^\\[]*^\\s*port\\s*=\\s*(\\d+)') { $matches[1] } else { '6091' } } catch { '6091' }"`) do set "WEB_PORT=%%p"
+)
+if "%WEB_PORT%"=="" set "WEB_PORT=6091"
 
 if exist "%~dp0dist\\DBQuery.exe" (
     set "EXE_PATH=%~dp0dist\\DBQuery.exe"
@@ -137,7 +154,7 @@ set "DBQUERY_TRUST_PROXY_PREFIX=true"
 net session >nul 2>&1
 if errorlevel 1 (
     echo Requesting administrator privileges to configure Windows Firewall...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -ArgumentList '%WEB_PORT%' -Verb RunAs"
     exit /b
 )
 
@@ -151,6 +168,9 @@ if not exist "%EXE_PATH%" (
     pause
     exit /b 1
 )
+
+echo Checking and stopping existing web instances...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); foreach($target in $targets){ Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500"
 
 echo Configuring Windows Firewall...
 netsh advfirewall firewall delete rule name="dbquery" dir=in >nul 2>&1
@@ -168,6 +188,7 @@ for /f "tokens=4" %%a in ('route print -4 ^| findstr /R /C:"^[ ]*0\\.0\\.0\\.0[ 
 echo.
 echo   Local:   http://localhost:%WEB_PORT%/
 echo   Network: http://%L_IP%:%WEB_PORT%/
+echo   API:     http://%L_IP%:%WEB_PORT%/api/integration/frontend-login
 echo.
 echo   Hint: Add ?hide_header=1 or ?embed=1 for embedded mode.
 echo ================================================
@@ -185,18 +206,6 @@ setlocal EnableExtensions
 title 停止 DBQuery Web 服务
 cd /d "%~dp0"
 
-set "WEB_PORT=8094"
-if exist "%~dp0dist\\DBQuery.exe" (
-    set "EXE_PATH=%~dp0dist\\DBQuery.exe"
-) else if exist "%~dp0dist_final\\DBQuery.exe" (
-    set "EXE_PATH=%~dp0dist_final\\DBQuery.exe"
-) else if exist "%~dp0DBQuery.exe" (
-    set "EXE_PATH=%~dp0DBQuery.exe"
-) else (
-    set "EXE_PATH=%~dp0dist\\DBQuery.exe"
-)
-set "DBQUERY_EXPECTED_EXE=%EXE_PATH%"
-
 net session >nul 2>&1
 if errorlevel 1 (
     echo 正在申请管理员权限以停止服务...
@@ -208,7 +217,7 @@ echo ================================================
 echo   正在停止 DBQuery Web 服务...
 echo ================================================
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$expected=[IO.Path]::GetFullPath($env:DBQUERY_EXPECTED_EXE); $targets=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.ExecutablePath -and [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath),$expected,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); if(-not $targets){ Write-Host 'DBQuery Web 服务未在运行。'; exit 0 }; foreach($target in $targets){ Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop }; Start-Sleep -Milliseconds 500; $remaining=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.ExecutablePath -and [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath),$expected,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); if($remaining){ Write-Host '停止服务失败。'; exit 1 }; Write-Host 'DBQuery Web 服务已成功停止。'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); if(-not $targets){ Write-Host 'DBQuery Web 服务未在运行。'; exit 0 }; foreach($target in $targets){ Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500; Write-Host 'DBQuery Web 服务已成功停止。'"
 set "STOP_RESULT=%ERRORLEVEL%"
 
 echo.
@@ -221,18 +230,6 @@ setlocal EnableExtensions
 title Stop DBQuery Web Server
 cd /d "%~dp0"
 
-set "WEB_PORT=8094"
-if exist "%~dp0dist\\DBQuery.exe" (
-    set "EXE_PATH=%~dp0dist\\DBQuery.exe"
-) else if exist "%~dp0dist_final\\DBQuery.exe" (
-    set "EXE_PATH=%~dp0dist_final\\DBQuery.exe"
-) else if exist "%~dp0DBQuery.exe" (
-    set "EXE_PATH=%~dp0DBQuery.exe"
-) else (
-    set "EXE_PATH=%~dp0dist\\DBQuery.exe"
-)
-set "DBQUERY_EXPECTED_EXE=%EXE_PATH%"
-
 net session >nul 2>&1
 if errorlevel 1 (
     echo Requesting administrator privileges to stop DBQuery Web...
@@ -244,7 +241,7 @@ echo ================================================
 echo   Stopping DBQuery Web Server...
 echo ================================================
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$expected=[IO.Path]::GetFullPath($env:DBQUERY_EXPECTED_EXE); $targets=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.ExecutablePath -and [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath),$expected,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); if(-not $targets){ Write-Host 'DBQuery Web is not running.'; exit 0 }; foreach($target in $targets){ Stop-Process -Id $target.ProcessId -Force -ErrorAction Stop }; Start-Sleep -Milliseconds 500; $remaining=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.ExecutablePath -and [string]::Equals([IO.Path]::GetFullPath($_.ExecutablePath),$expected,[StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); if($remaining){ Write-Host 'Failed to stop DBQuery Web.'; exit 1 }; Write-Host 'DBQuery Web stopped.'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$targets=@(Get-WmiObject Win32_Process | Where-Object { $_.Name -eq 'DBQuery.exe' -and $_.CommandLine -match '(?i)(^|\\s)--web(\\s|$)' }); if(-not $targets){ Write-Host 'DBQuery Web is not running.'; exit 0 }; foreach($target in $targets){ Stop-Process -Id $target.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 500; Write-Host 'DBQuery Web stopped.'"
 set "STOP_RESULT=%ERRORLEVEL%"
 
 echo.
@@ -277,7 +274,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-call "%~dp0启动DBQueryWeb服务.bat"
+call "%~dp0启动DBQueryWeb服务.bat" %*
 if errorlevel 1 (
     echo.
     echo 启动服务失败。
@@ -316,7 +313,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-call "%~dp0start_web.bat"
+call "%~dp0start_web.bat" %*
 if errorlevel 1 (
     echo.
     echo Restart failed while starting DBQuery Web.
@@ -446,6 +443,14 @@ def assemble_deployment_folder(target_dir):
             import configparser
             cp = configparser.ConfigParser()
             cp.read_string(saved_config.decode('utf-8', errors='replace'))
+            if not cp.has_section('web'):
+                cp.add_section('web')
+            if not cp.has_option('web', 'port'):
+                cp.set('web', 'port', '6091')
+            if not cp.has_option('web', 'query_timeout'):
+                cp.set('web', 'query_timeout', '60')
+            if not cp.has_option('web', 'max_rows'):
+                cp.set('web', 'max_rows', '5000')
             if not cp.has_section('integration'):
                 cp.add_section('integration')
             if cp.get('integration', 'frontend_embed_enabled', fallback='no').lower() not in ('yes', '1', 'true', 'on'):
@@ -549,7 +554,13 @@ def create_zip(zip_path, source_dir, root_folder_name):
                     continue
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, source_dir)
-                zf.write(full_path, os.path.join(root_folder_name, rel_path))
+                arcname = os.path.join(root_folder_name, rel_path).replace('\\', '/')
+                zinfo = zipfile.ZipInfo.from_file(full_path, arcname)
+                zinfo.compress_type = zipfile.ZIP_DEFLATED
+                # 明确启用 UTF-8 文件名标志位（bit 11: 0x800），防止 Windows 资源管理器及解压软件出现中文乱码
+                zinfo.flag_bits |= 0x800
+                with open(full_path, 'rb') as f_in:
+                    zf.writestr(zinfo, f_in.read())
 
     if os.path.exists(zip_path):
         try:

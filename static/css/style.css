@@ -361,6 +361,9 @@ body.standalone-mode .app-body {
 
 /* 顶部多标签栏（对齐桌面 EXE 多页签机制） */
 .app-tabbar-container {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
     flex: 0 0 auto;
     background: #e9eef3;
     border-bottom: 1px solid var(--peis-border);
@@ -370,16 +373,412 @@ body.standalone-mode .app-body {
     z-index: 10;
 }
 
+/* 抽屉快捷触发按钮 */
+.drawer-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 32px;
+    min-height: 32px;
+    padding: 0 11px;
+    margin-bottom: -1px;
+    background: #ffffff;
+    border: 1px solid #cad6e2;
+    border-bottom: 1px solid var(--peis-border);
+    border-radius: 4px 4px 0 0;
+    color: #2b5a84;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    transition: all .18s ease;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.03);
+}
+
+.drawer-toggle-btn .icon {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    transition: transform .18s ease;
+}
+
+.drawer-toggle-btn:hover {
+    background: #f0f7ff;
+    color: var(--peis-primary);
+    border-color: #9ac2ec;
+}
+
+.drawer-toggle-btn.active {
+    background: var(--peis-primary);
+    color: #ffffff;
+    border-color: var(--peis-primary);
+    box-shadow: 0 2px 6px rgba(26, 110, 181, 0.35);
+}
+
+.drawer-toggle-btn.active .icon {
+    transform: rotate(90deg);
+}
+
 .app-tabbar {
     display: flex;
     align-items: flex-end;
     gap: 3px;
+    flex: 1 1 auto;
+    min-width: 0;
     overflow-x: auto;
     overflow-y: hidden;
     white-space: nowrap;
     scrollbar-width: none;
 }
 .app-tabbar::-webkit-scrollbar { display: none; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   悬浮报表抽屉（Drawer）与遮罩样式：高颜值、平滑滑入、0 挤压底层表格
+   ════════════════════════════════════════════════════════════════════════════ */
+.drawer-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 23, 42, 0.28);
+    backdrop-filter: blur(1.5px);
+    z-index: 998;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.22s ease, visibility 0.22s ease;
+}
+
+.drawer-backdrop.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+.floating-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 300px;
+    max-width: 86vw;
+    background: #ffffff;
+    box-shadow: 6px 0 28px rgba(15, 23, 42, 0.16), 2px 0 6px rgba(15, 23, 42, 0.08);
+    z-index: 999;
+    display: flex;
+    flex-direction: column;
+    transform: translateX(-100%);
+    transition: transform 0.24s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.24s ease;
+    visibility: hidden;
+    overflow: hidden;
+    user-select: none;
+}
+
+.floating-drawer.active {
+    transform: translateX(0);
+    visibility: visible;
+}
+
+/* 抽屉顶部标题区 */
+.drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 48px;
+    min-height: 48px;
+    padding: 0 14px 0 16px;
+    background: linear-gradient(180deg, #f8fafc 0%, #edf3f8 100%);
+    border-bottom: 1px solid #dce5ee;
+}
+
+.drawer-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #1e3a5f;
+}
+
+.drawer-title-icon {
+    width: 16px;
+    height: 16px;
+    color: var(--peis-primary);
+}
+
+.drawer-count-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: #e1effe;
+    color: var(--peis-primary);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.drawer-close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.drawer-close-btn:hover {
+    background: #e2e8f0;
+    color: #0f172a;
+}
+
+.drawer-close-btn .icon {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 2.2;
+}
+
+/* 抽屉搜索框 */
+.drawer-search-box {
+    padding: 10px 14px;
+    background: #ffffff;
+    border-bottom: 1px solid #edf2f7;
+}
+
+.drawer-search-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.drawer-search-icon {
+    position: absolute;
+    left: 10px;
+    width: 14px;
+    height: 14px;
+    color: #94a3b8;
+    pointer-events: none;
+}
+
+.drawer-search-input {
+    width: 100%;
+    height: 32px;
+    padding: 4px 28px 4px 30px;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: #1e293b;
+    outline: none;
+    transition: all 0.15s ease;
+    box-sizing: border-box;
+}
+
+.drawer-search-input:focus {
+    background: #ffffff;
+    border-color: var(--peis-primary);
+    box-shadow: 0 0 0 2px rgba(26, 110, 181, 0.15);
+}
+
+.drawer-search-clear {
+    position: absolute;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 50%;
+    background: #cbd5e1;
+    color: #ffffff;
+    cursor: pointer;
+    padding: 0;
+    transition: background-color 0.12s ease;
+}
+
+.drawer-search-clear:hover {
+    background: #94a3b8;
+}
+
+.drawer-search-clear .icon {
+    width: 10px;
+    height: 10px;
+    stroke: currentColor;
+    stroke-width: 2.5;
+}
+
+/* 抽屉树状内容列表 */
+.drawer-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 6px 8px 16px;
+}
+
+.drawer-body::-webkit-scrollbar {
+    width: 5px;
+}
+.drawer-body::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+}
+.drawer-body::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* 分组样式 */
+.drawer-group {
+    margin-bottom: 6px;
+}
+
+.drawer-group-title {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #475569;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.12s ease;
+}
+
+.drawer-group-title:hover {
+    background: #f1f5f9;
+    color: #1e293b;
+}
+
+.drawer-group-arrow {
+    display: inline-block;
+    width: 12px;
+    font-size: 10px;
+    color: #94a3b8;
+    margin-right: 6px;
+    transition: transform 0.15s ease;
+}
+
+.drawer-group.collapsed .drawer-group-arrow {
+    transform: rotate(-90deg);
+}
+
+.drawer-group.collapsed .drawer-group-items {
+    display: none;
+}
+
+.drawer-group-name {
+    flex: 1 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.drawer-group-count {
+    font-size: 11px;
+    color: #94a3b8;
+    font-weight: normal;
+    margin-left: 6px;
+}
+
+/* 报表列表项 */
+.drawer-group-items {
+    padding-left: 10px;
+    margin-top: 2px;
+}
+
+.drawer-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    margin-bottom: 2px;
+    border-radius: 6px;
+    color: #334155;
+    text-decoration: none;
+    cursor: pointer;
+    transition: all 0.12s ease;
+    border-left: 3px solid transparent;
+}
+
+.drawer-item:hover {
+    background: #eef6fc;
+    color: var(--peis-primary);
+    border-left-color: var(--peis-primary);
+    text-decoration: none;
+}
+
+.drawer-item.active {
+    background: #e1effe;
+    color: var(--peis-primary);
+    border-left-color: var(--peis-primary);
+    font-weight: 600;
+}
+
+.drawer-item-icon {
+    width: 14px;
+    height: 14px;
+    color: #64748b;
+    flex-shrink: 0;
+    transition: color 0.12s ease;
+}
+
+.drawer-item:hover .drawer-item-icon,
+.drawer-item.active .drawer-item-icon {
+    color: var(--peis-primary);
+}
+
+.drawer-item-info {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.drawer-item-title {
+    font-size: 12.5px;
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.drawer-item-desc {
+    font-size: 11px;
+    color: #94a3b8;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-top: 1px;
+}
+
+.drawer-item-status {
+    font-size: 10.5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: #dcfce7;
+    color: #166534;
+    white-space: nowrap;
+    margin-left: auto;
+    flex-shrink: 0;
+}
+
+.drawer-empty-search {
+    text-align: center;
+    padding: 30px 16px;
+    color: #94a3b8;
+    font-size: 12.5px;
+}
 
 .tab-item {
     display: inline-flex;
@@ -536,6 +935,11 @@ body.standalone-mode .app-body {
 .embed-mode .page-header { min-height: 38px; padding-top: 5px; padding-bottom: 5px; }
 .embed-mode .page-title { font-size: 15px; }
 .embed-mode .page-desc { display: inline; margin-left: 8px; font-size: 11px; }
+
+/* 嵌入模式下，报表查询 Tab 内彻底隐藏冗余的 page-header（红框行），将 50px 高度完全还给表格 */
+.embed-mode .tab-pane:not(#pane-tab-welcome) .page-header {
+    display: none !important;
+}
 
 .business-section { flex: 0 0 auto; }
 .section-heading {
