@@ -1,4 +1,4 @@
-/* DBQuery Web 前端交互：嵌入状态、查询与导出。 */
+/* DBQuery Web 前端交互：嵌入状态、查询、导出与多标签页导航。 */
 var lastQueryResult = null;
 var dataTable = null;
 var resultGridResizeTimer = null;
@@ -19,7 +19,449 @@ $(document).ajaxError(function (event, xhr) {
     }
 });
 
+/* ════════════════════════════════════════════════════════════════════════════
+   TabManager：多标签页调度（对齐桌面 EXE 多页签机制）
+   ════════════════════════════════════════════════════════════════════════════ */
+var TabManager = {
+    tabs: {},
+    activeTabId: null,
+    formsCache: null,
+    tabCounter: 0,
+
+    init: function () {
+        var self = this;
+
+        // 1. 扫描 DOM 中已存在的标签页
+        $('#app-tabbar .tab-item').each(function () {
+            var $btn = $(this);
+            var tabId = $btn.data('tabId');
+            var filePath = $btn.data('filePath') || '';
+            var $pane = $('#pane-' + tabId);
+            var isWelcome = (tabId === 'tab-welcome');
+            var title = $btn.find('.tab-title').text().trim();
+            self.tabs[tabId] = {
+                tabId: tabId,
+                filePath: filePath,
+                title: title,
+                isWelcome: isWelcome,
+                $tabBtn: $btn,
+                $pane: $pane,
+                dataTable: null,
+                lastQueryResult: null,
+                formParams: (window.DBQUERY && window.DBQUERY.formParams) || []
+            };
+            if ($btn.hasClass('active')) {
+                self.activeTabId = tabId;
+            }
+        });
+
+        if (!self.activeTabId && self.tabs['tab-welcome']) {
+            self.activeTabId = 'tab-welcome';
+        }
+
+        // 2. 标签栏点击切换
+        $('#app-tabbar').on('click', '.tab-item', function (e) {
+            if ($(e.target).closest('.tab-close').length) {
+                return;
+            }
+            var tabId = $(this).data('tabId');
+            if (tabId) self.activateTab(tabId);
+        });
+
+        // 3. 标签关闭按钮点击
+        $('#app-tabbar').on('click', '.tab-close', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var tabId = $(this).closest('.tab-item').data('tabId');
+            if (tabId) self.closeTab(tabId);
+        });
+
+        // 4. 拦截报表卡片与侧边栏链接，无刷新在多标签页中打开
+        $(document).on('click', '.nav-item-link, .project-card', function (e) {
+            var $link = $(this);
+            var filePath = $link.data('filePath');
+            var href = $link.attr('href') || '';
+            if (!filePath && href) {
+                var match = href.match(/\/query\/(.+?)(?:\?|#|$)/);
+                if (match && match[1]) {
+                    try { filePath = decodeURIComponent(match[1]); } catch (ignore) { filePath = match[1]; }
+                }
+            }
+            if (filePath) {
+                e.preventDefault();
+                self.openReport(filePath);
+            }
+        });
+
+        // 5. 拦截“返回报表主页”按钮，切换至欢迎页
+        $(document).on('click', '.report-home-link', function (e) {
+            if (self.tabs['tab-welcome']) {
+                e.preventDefault();
+                self.activateTab('tab-welcome');
+            }
+        });
+    },
+
+    getActiveTab: function () {
+        return this.tabs[this.activeTabId] || null;
+    },
+
+    getActivePane: function () {
+        var tab = this.getActiveTab();
+        if (tab && tab.$pane && tab.$pane.length) return tab.$pane;
+        return $('.tab-pane.active').first();
+    },
+
+    getLegacyActiveTab: function () {
+        var $pane = $('.tab-pane.active').first();
+        var tabId = $pane.data('tabId') || 'tab-init';
+        return {
+            tabId: tabId,
+            filePath: $pane.data('filePath') || (window.DBQUERY ? window.DBQUERY.filePath : ''),
+            $pane: $pane,
+            lastQueryResult: lastQueryResult,
+            dataTable: dataTable
+        };
+    },
+
+    getTabByFilePath: function (filePath) {
+        var norm = String(filePath || '').replace(/\\/g, '/');
+        for (var id in this.tabs) {
+            if (Object.prototype.hasOwnProperty.call(this.tabs, id)) {
+                var tab = this.tabs[id];
+                if (tab.filePath && String(tab.filePath).replace(/\\/g, '/') === norm) {
+                    return tab;
+                }
+            }
+        }
+        return null;
+    },
+
+    activateTab: function (tabId) {
+        var tab = this.tabs[tabId];
+        if (!tab) return;
+        this.activeTabId = tabId;
+
+        // 切换标签按钮激活状态
+        $('#app-tabbar .tab-item').removeClass('active').attr('aria-selected', 'false');
+        tab.$tabBtn.addClass('active').attr('aria-selected', 'true');
+        if (tab.$tabBtn[0] && tab.$tabBtn[0].scrollIntoView) {
+            try {
+                tab.$tabBtn[0].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+            } catch (ignore) {
+                tab.$tabBtn[0].scrollIntoView(false);
+            }
+        }
+
+        // 切换标签内容窗格
+        $('.tab-pane').removeClass('active').hide();
+        tab.$pane.addClass('active').show();
+
+        // 同步全局变量以兼容历史脚本与测试
+        dataTable = tab.dataTable;
+        lastQueryResult = tab.lastQueryResult;
+        if (window.DBQUERY) {
+            window.DBQUERY.filePath = tab.filePath;
+            window.DBQUERY.formParams = tab.formParams;
+        }
+
+        // 激活时重新计算表格列宽
+        if (tab.dataTable) {
+            window.setTimeout(function () {
+                try { tab.dataTable.columns.adjust(); } catch (ignore) {}
+            }, 20);
+        }
+
+        // 高亮侧边栏对应的报表项
+        if (tab.filePath) {
+            highlightCurrentForm(tab.filePath);
+            $('#project-switcher-trigger .project-switcher-current').text('当前：' + tab.title);
+        } else {
+            $('.nav-item-link').removeClass('active');
+            $('#project-switcher-trigger .project-switcher-current').text('综合查询');
+        }
+    },
+
+    closeTab: function (tabId) {
+        var tab = this.tabs[tabId];
+        if (!tab || tab.isWelcome) return;
+
+        var tabIds = Object.keys(this.tabs);
+        var curIndex = tabIds.indexOf(tabId);
+        var nextTabId = 'tab-welcome';
+        if (this.activeTabId === tabId) {
+            if (curIndex > 0 && tabIds[curIndex - 1]) {
+                nextTabId = tabIds[curIndex - 1];
+            } else if (curIndex + 1 < tabIds.length && tabIds[curIndex + 1]) {
+                nextTabId = tabIds[curIndex + 1];
+            }
+        }
+
+        if (tab.dataTable) {
+            try { tab.dataTable.destroy(); } catch (ignore) {}
+            tab.dataTable = null;
+        }
+        tab.$tabBtn.remove();
+        tab.$pane.remove();
+        delete this.tabs[tabId];
+
+        if (this.activeTabId === tabId) {
+            this.activateTab(nextTabId);
+        }
+    },
+
+    openReport: function (filePath) {
+        var self = this;
+        var existing = self.getTabByFilePath(filePath);
+        if (existing) {
+            self.activateTab(existing.tabId);
+            return;
+        }
+
+        self.fetchFormConfig(filePath, function (form) {
+            if (!form) {
+                window.location.href = preserveEmbedParams(apiPath('/query/' + encodeFilePath(filePath)));
+                return;
+            }
+            self.createReportTab(form);
+        });
+    },
+
+    fetchFormConfig: function (filePath, callback) {
+        var self = this;
+        var norm = String(filePath || '').replace(/\\/g, '/');
+        if (self.formsCache && self.formsCache[norm]) {
+            callback(self.formsCache[norm]);
+            return;
+        }
+        $.get(apiPath('/api/forms'), function (data) {
+            self.cacheFormsData(data);
+            callback(self.formsCache[norm] || null);
+        }).fail(function () {
+            callback(null);
+        });
+    },
+
+    cacheFormsData: function (data) {
+        this.formsCache = {};
+        for (var group in data) {
+            if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
+            var forms = data[group];
+            for (var i = 0; i < forms.length; i++) {
+                var f = forms[i];
+                var fp = String(f.file_path || '').replace(/\\/g, '/');
+                this.formsCache[fp] = f;
+            }
+        }
+    },
+
+    createReportTab: function (form) {
+        var self = this;
+        self.tabCounter++;
+        var tabId = 'tab-report-' + self.tabCounter;
+        var filePath = form.file_path;
+
+        var $btn = $('<div class="tab-item" role="tab"></div>')
+            .attr('id', 'tab-btn-' + tabId)
+            .attr('data-tab-id', tabId)
+            .attr('data-file-path', filePath)
+            .attr('title', form.title)
+            .attr('aria-controls', 'pane-' + tabId);
+
+        $btn.html(
+            '<svg class="icon tab-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>' +
+            '<span class="tab-title">' + esc(form.title) + '</span>' +
+            '<button class="tab-close" type="button" title="关闭标签页" aria-label="关闭 ' + esc(form.title) + ' 标签页">×</button>'
+        );
+        $('#app-tabbar').append($btn);
+
+        var $pane = $('<div class="tab-pane" role="tabpanel"></div>')
+            .attr('id', 'pane-' + tabId)
+            .attr('data-tab-id', tabId)
+            .attr('data-file-path', filePath)
+            .attr('aria-labelledby', 'tab-btn-' + tabId);
+
+        var paneHtml = self.renderPaneHtml(form, tabId);
+        $pane.html(paneHtml);
+        $('#tab-panes-container').append($pane);
+
+        self.tabs[tabId] = {
+            tabId: tabId,
+            filePath: filePath,
+            title: form.title,
+            isWelcome: false,
+            $tabBtn: $btn,
+            $pane: $pane,
+            dataTable: null,
+            lastQueryResult: null,
+            formParams: form.params || []
+        };
+
+        initializeDefaultValues($pane);
+        initializeSearchableSelects($pane);
+        loadDynamicSelectOptions(filePath, form.params || [], $pane);
+
+        self.activateTab(tabId);
+    },
+
+    renderPaneHtml: function (form, tabId) {
+        var isEmbed = isEmbedMode();
+        var homeUrl = isEmbed ? preserveEmbedParams(apiPath('/?embed=1&hide_header=1&sidebar=0')) : apiPath('/');
+        var html = '<header class="page-header">';
+        html += '<div class="page-heading-left">';
+        html += '<a class="report-home-link" href="' + esc(homeUrl) + '" aria-label="返回报表主页" title="返回报表主页">';
+        html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>';
+        html += '<span>返回报表主页</span></a>';
+        html += '<div class="page-title-block">';
+        html += '<h1 class="page-title">' + esc(form.title) + '</h1>';
+        if (form.description) {
+            html += '<p class="page-desc">' + esc(form.description) + '</p>';
+        }
+        html += '</div></div>';
+
+        if (isSidebarHidden()) {
+            html += '<div class="project-switcher" id="project-switcher-' + tabId + '">';
+            html += '<button class="project-switcher-trigger" type="button" aria-expanded="false" onclick="toggleDynamicProjectSwitcher(this)">';
+            html += '<span class="project-switcher-label">查询项目</span>';
+            html += '<span class="project-switcher-current">当前：' + esc(form.title) + '</span>';
+            html += '<span class="project-switcher-caret" aria-hidden="true">▾</span></button>';
+            html += '<div class="project-switcher-panel" hidden>';
+            html += '<label class="visually-hidden">搜索查询项目</label>';
+            html += '<input type="search" class="project-search" placeholder="搜索查询项目" oninput="filterDynamicProjectSwitcher(this)">';
+            html += '<div class="project-menu-tree dynamic-project-menu-tree"></div>';
+            html += '</div></div>';
+        }
+        html += '</header>';
+
+        html += '<section class="business-section conditions-section" aria-labelledby="conditions-heading-' + tabId + '">';
+        html += '<div class="section-heading" id="conditions-heading-' + tabId + '">查询条件</div>';
+        if (form.params && form.params.length) {
+            html += '<div class="params-grid">';
+            for (var i = 0; i < form.params.length; i++) {
+                html += renderParamHtml(form.params[i], tabId, i + 1);
+            }
+            html += '</div>';
+        }
+        html += '<div class="action-bar">';
+        html += '<button class="btn btn-primary-action btn-execute" type="button" onclick="executeQuery(\'' + tabId + '\')">';
+        html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>';
+        html += '<span class="button-text">查询</span></button>';
+        html += '<button class="btn btn-reset-action btn-reset" type="button" onclick="resetQueryParams(\'' + tabId + '\')" title="清空并重置为初始默认条件">';
+        html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>';
+        html += '<span class="button-text">重置</span></button>';
+        html += '<button class="btn btn-secondary-action btn-export" type="button" onclick="exportExcel(\'' + tabId + '\')" disabled>';
+        html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14v5h14v-5"/></svg>';
+        html += '<span class="button-text">导出</span></button>';
+        html += '<span class="spinner d-none" aria-label="正在查询"></span>';
+        html += '</div></section>';
+
+        html += '<section class="business-section result-section" aria-labelledby="result-heading-' + tabId + '">';
+        html += '<div class="section-heading result-heading" id="result-heading-' + tabId + '">';
+        html += '<div class="result-heading-left"><span class="result-title">查询结果</span>';
+        html += '<span class="result-warning d-none" aria-live="polite"></span></div>';
+        html += '<span class="action-status result-status" aria-live="polite"></span></div>';
+        html += '<div class="inline-message d-none" role="status"></div>';
+        html += '<div class="result-panel">';
+        html += '<table class="display result-table" style="width:100%"><thead></thead><tbody></tbody></table>';
+        html += '<div class="result-empty">设置查询条件后点击“查询”</div>';
+        html += '</div></section>';
+
+        return html;
+    }
+};
+
+function renderParamHtml(p, tabId, loopIndex) {
+    var fieldId = 'param-' + tabId + '-' + loopIndex;
+    var rawDef = p.raw_default !== undefined ? p.raw_default : (p.default || '');
+    var resolvedDef = p.default !== undefined ? p.default : '';
+    var widthStyle = p.width ? ' style="--param-width: ' + esc(p.width) + ';"' : '';
+    var requiredAttr = p.required ? ' required' : '';
+    var reqMark = p.required ? '<span class="required-mark" aria-label="必填">*</span>' : '';
+    var placeholder = esc(p.placeholder || p.label || '');
+
+    if (p.ptype === 'hidden') {
+        var hVal = esc(String(resolvedDef).replace('{today}', ''));
+        return '<input type="hidden" class="param-input" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" value="' + hVal + '">';
+    }
+
+    var html = '<div class="param-field' + (p.ptype === 'checkbox' ? ' checkbox-field' : '') + '"' + widthStyle + '>';
+    html += '<label for="' + fieldId + '">' + esc(p.label) + reqMark + '</label>';
+
+    if (p.ptype === 'date') {
+        var dVal = rawDef === '{today}' ? todayStr() : esc(String(resolvedDef).replace('{today}', ''));
+        html += '<input id="' + fieldId + '" type="date" class="param-input" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" value="' + dVal + '"' + (p.placeholder ? ' placeholder="' + esc(p.placeholder) + '"' : '') + requiredAttr + '>';
+    } else if (p.ptype === 'datetime') {
+        var dtVal = rawDef === '{today}' ? nowStr() : esc(String(resolvedDef).replace(' ', 'T'));
+        html += '<input id="' + fieldId + '" type="datetime-local" step="1" class="param-input" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" value="' + dtVal + '"' + (p.placeholder ? ' placeholder="' + esc(p.placeholder) + '"' : '') + requiredAttr + '>';
+    } else if (p.ptype === 'number') {
+        html += '<input id="' + fieldId + '" type="number" class="param-input" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" value="' + esc(resolvedDef) + '" placeholder="' + (p.placeholder ? esc(p.placeholder) : '请输入数字') + '"' + requiredAttr + '>';
+    } else if (p.ptype === 'select') {
+        var menuId = 'param-options-' + tabId + '-' + loopIndex;
+        html += '<div class="searchable-select" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" data-required="' + (p.required ? '1' : '0') + '" data-allow-custom="' + (p.allow_custom ? '1' : '0') + '">';
+        html += '<div class="searchable-select-control">';
+        html += '<input id="' + fieldId + '" type="text" class="searchable-select-input" autocomplete="off" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="' + menuId + '" placeholder="' + (p.placeholder ? esc(p.placeholder) : '输入关键字筛选') + '">';
+        html += '<button type="button" class="searchable-select-toggle" tabindex="-1" aria-label="展开候选项">▾</button>';
+        html += '</div>';
+        html += '<input type="hidden" class="param-input searchable-select-value" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" value="' + esc(resolvedDef) + '">';
+        html += '<div id="' + menuId + '" class="searchable-select-menu" role="listbox" hidden>';
+        var items = p.option_items || [];
+        for (var i = 0; i < items.length; i++) {
+            var opt = items[i];
+            var isSel = String(opt.value) === String(resolvedDef);
+            html += '<button type="button" class="searchable-select-option" role="option" data-value="' + esc(opt.value) + '" aria-selected="' + (isSel ? 'true' : 'false') + '">' + esc(opt.label) + '</button>';
+        }
+        html += '</div></div>';
+    } else if (p.ptype === 'textarea') {
+        var taVal = esc(String(resolvedDef).replace('{today}', ''));
+        html += '<textarea id="' + fieldId + '" class="param-input param-textarea" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" placeholder="' + placeholder + '"' + requiredAttr + '>' + taVal + '</textarea>';
+    } else if (p.ptype === 'checkbox') {
+        var isChecked = ['1', 'true', 'yes', 'on', '是'].indexOf(String(rawDef).toLowerCase()) >= 0;
+        html += '<label class="checkbox-control" for="' + fieldId + '">';
+        html += '<input id="' + fieldId + '" type="checkbox" class="param-input" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" data-checked-value="1" value="1"' + (isChecked ? ' checked' : '') + requiredAttr + '>';
+        html += '<span>是</span></label>';
+    } else if (p.ptype === 'radio') {
+        html += '<div class="radio-group" id="' + fieldId + '" data-default="' + esc(rawDef) + '">';
+        var radioItems = p.option_items || [];
+        for (var r = 0; r < radioItems.length; r++) {
+            var rOpt = radioItems[r];
+            var rSel = String(rOpt.value) === String(resolvedDef);
+            html += '<label class="radio-control">';
+            html += '<input type="radio" class="param-input" data-name="' + esc(p.name) + '" value="' + esc(rOpt.value) + '"' + (rSel ? ' checked' : '') + (p.required && r === 0 ? ' required' : '') + '>';
+            html += '<span>' + esc(rOpt.label) + '</span></label>';
+        }
+        html += '</div>';
+    } else {
+        var txtVal = esc(String(resolvedDef).replace('{today}', ''));
+        html += '<input id="' + fieldId + '" type="text" class="param-input" data-name="' + esc(p.name) + '" data-default="' + esc(rawDef) + '" value="' + txtVal + '" placeholder="' + placeholder + '"' + requiredAttr + '>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+function toggleDynamicProjectSwitcher(trigger) {
+    var $panel = $(trigger).next('.project-switcher-panel');
+    var opening = $panel.prop('hidden');
+    $panel.prop('hidden', !opening);
+    $(trigger).attr('aria-expanded', opening ? 'true' : 'false');
+    if (opening) {
+        $panel.find('.project-search').trigger('focus');
+        if ($panel.find('.dynamic-project-menu-tree:empty').length) {
+            $panel.find('.dynamic-project-menu-tree').html($('#form-tree').html() || $('#project-menu-tree').html());
+        }
+    }
+}
+
+function filterDynamicProjectSwitcher(input) {
+    var $panel = $(input).closest('.project-switcher-panel');
+    filterFormTree($(input).val(), $panel.find('.dynamic-project-menu-tree'));
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   页面初始化与全局事件
+   ════════════════════════════════════════════════════════════════════════════ */
 $(document).ready(function () {
+    TabManager.init();
     initializeDefaultValues();
     initializeSearchableSelects();
     loadDynamicSelectOptions();
@@ -54,14 +496,15 @@ function preserveEmbedParams(url) {
     return target.pathname + (target.search ? target.search : '') + target.hash;
 }
 
-function initializeDefaultValues() {
-    $('.param-input[type="date"]').each(function () {
+function initializeDefaultValues($context) {
+    $context = $context || $(document);
+    $context.find('.param-input[type="date"]').each(function () {
         var $input = $(this);
         if (!$input.val() && $input.data('default') === '{today}') {
             $input.val(todayStr());
         }
     });
-    $('.param-input[type="datetime-local"]').each(function () {
+    $context.find('.param-input[type="datetime-local"]').each(function () {
         var $input = $(this);
         if (!$input.val() && $input.data('default') === '{today}') {
             $input.val(nowStr());
@@ -69,14 +512,16 @@ function initializeDefaultValues() {
     });
 }
 
-function initializeSearchableSelects() {
-    $('.searchable-select').each(function () {
+function initializeSearchableSelects($context) {
+    $context = $context || $(document);
+    $context.find('.searchable-select').each(function () {
         var $root = $(this);
+        if ($root.data('searchableSelect')) return;
+
         var $input = $root.find('.searchable-select-input');
         var $value = $root.find('.searchable-select-value');
         var $menu = $root.find('.searchable-select-menu');
         var $toggle = $root.find('.searchable-select-toggle');
-        // P1-1: 读取 allow_custom 标志，决定是否允许提交候选项外的自定义值。
         var allowCustom = $root.attr('data-allow-custom') === '1';
         var activeIndex = -1;
 
@@ -95,7 +540,9 @@ function initializeSearchableSelects() {
             activeIndex = Math.max(0, Math.min(index, $options.length - 1));
             $options.removeClass('is-active');
             var $active = $options.eq(activeIndex).addClass('is-active');
-            $active[0].scrollIntoView({block: 'nearest'});
+            if ($active[0] && $active[0].scrollIntoView) {
+                $active[0].scrollIntoView({block: 'nearest'});
+            }
         }
         function openMenu() {
             filterOptions($input.val());
@@ -104,7 +551,6 @@ function initializeSearchableSelects() {
             if (visibleOptions().length) setActive(0);
         }
         function selectOption($option) {
-            // 点选候选项：始终提交 data-value（如 DoctorID），而不是显示文字。
             if (!$option || !$option.length) return;
             $input.val($option.text());
             $value.val($option.data('value'));
@@ -153,12 +599,8 @@ function initializeSearchableSelects() {
 
         $input.on('focus', openMenu);
         $input.on('input', function () {
-            // 用户编辑输入框：清除已确认的候选项选中状态。
-            // allow_custom=false（默认）：清空 value，必须点选候选项才能提交。
-            // allow_custom=true：将当前输入文字同步到 value，允许提交自定义值。
             $menu.find('[aria-selected="true"]').attr('aria-selected', 'false');
             if (allowCustom) {
-                // P1-1: allow_custom=true 时输入文字即为提交值（原确认选中的 value 立即失效）。
                 $value.val($input.val());
             } else {
                 $value.val('');
@@ -198,12 +640,15 @@ function initializeSearchableSelects() {
     });
 }
 
-function loadDynamicSelectOptions() {
+function loadDynamicSelectOptions(filePath, formParams, $context) {
     var config = window.DBQUERY || {};
-    var params = config.formParams || [];
+    filePath = filePath || config.filePath;
+    var params = formParams || config.formParams || [];
+    $context = $context || $(document);
+
     params.forEach(function (param) {
         if (!param || param.ptype !== 'select' || !param.dynamic_options) return;
-        var $root = $('.searchable-select').filter(function () {
+        var $root = $context.find('.searchable-select').filter(function () {
             return $(this).data('name') === param.name;
         }).first();
         if (!$root.length) return;
@@ -211,14 +656,13 @@ function loadDynamicSelectOptions() {
             url: apiPath('/api/options'),
             method: 'POST',
             contentType: 'application/json',
-            data: JSON.stringify({file_path: config.filePath, param_name: param.name}),
+            data: JSON.stringify({file_path: filePath, param_name: param.name}),
             success: function (data) {
                 var component = $root.data('searchableSelect');
                 if (component && component.setOptions) component.setOptions(data.options || []);
                 if (data.warning) showToast(data.warning, 'warning');
             },
             error: function () {
-                // 静态候选仍保留；数据库细节只记录在服务端日志。
                 showToast('候选数据加载失败，可刷新重试。', 'warning');
             }
         });
@@ -227,16 +671,16 @@ function loadDynamicSelectOptions() {
 
 function loadFormTree() {
     var $trees = $('#form-tree, #project-menu-tree');
-    if (!$trees.length || $trees.filter(':empty').length === 0) {
-        fixFormLinks();
-        highlightCurrentForm();
-        return;
-    }
-
     $.get(apiPath('/api/forms'), function (data) {
+        if (window.TabManager) {
+            TabManager.cacheFormsData(data);
+        }
         var html = buildFormTree(data);
         $trees.html(html);
         highlightCurrentForm();
+        if ($('#welcome-quick-links').length) {
+            $('#welcome-quick-links').html(buildWelcomeCards(data));
+        }
     }).fail(function () {
         showToast('查询项目加载失败，请稍后刷新页面。', 'error');
     });
@@ -255,13 +699,43 @@ function buildFormTree(data) {
         for (var index = 0; index < forms.length; index++) {
             var form = forms[index];
             var url = preserveEmbedParams(apiPath('/query/' + encodeFilePath(form.file_path)));
-            html += '<a href="' + esc(url) + '" class="nav-item-link' + (form.description ? ' has-desc' : '') + '" data-title="' + esc(form.title.toLowerCase()) + '">';
+            html += '<a href="' + esc(url) + '" class="nav-item-link' + (form.description ? ' has-desc' : '') + '" data-title="' + esc(form.title.toLowerCase()) + '" data-file-path="' + esc(form.file_path) + '">';
             html += svgIcon('document', 'nav-item-icon') + '<span class="nav-item-content"><span class="nav-item-title">' + esc(form.title) + '</span>';
             if (form.description) html += '<span class="nav-item-desc">' + esc(form.description) + '</span>';
             html += '</span></a>';
         }
         html += '</div></div>';
     }
+    return html;
+}
+
+function buildWelcomeCards(data) {
+    var html = '<section class="business-section project-list-section" aria-labelledby="project-list-heading">';
+    html += '<div class="section-heading" id="project-list-heading">';
+    html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>';
+    html += '<span>查询项目卡片</span></div>';
+    html += '<div class="project-list">';
+    for (var group in data) {
+        if (!Object.prototype.hasOwnProperty.call(data, group)) continue;
+        var forms = data[group];
+        html += '<div class="project-group">';
+        html += '<div class="project-group-title">';
+        html += '<span class="group-name">' + esc(group) + '</span>';
+        html += '<span class="group-count">' + forms.length + ' 个表单</span></div>';
+        for (var i = 0; i < forms.length; i++) {
+            var form = forms[i];
+            var url = preserveEmbedParams(apiPath('/query/' + encodeFilePath(form.file_path)));
+            html += '<a class="project-card" href="' + esc(url) + '" data-file-path="' + esc(form.file_path) + '">';
+            html += '<div class="project-card-icon">';
+            html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+            html += '</div><div class="project-card-info">';
+            html += '<strong class="project-card-title">' + esc(form.title) + '</strong>';
+            if (form.description) html += '<small class="project-card-desc">' + esc(form.description) + '</small>';
+            html += '</div><span class="project-card-badge">打开</span></a>';
+        }
+        html += '</div>';
+    }
+    html += '</div></section>';
     return html;
 }
 
@@ -278,16 +752,20 @@ function fixFormLinks() {
     });
 }
 
-function highlightCurrentForm() {
-    var filePath = window.DBQUERY ? window.DBQUERY.filePath : '';
+function highlightCurrentForm(filePath) {
+    filePath = filePath || (window.DBQUERY ? window.DBQUERY.filePath : '');
     if (!filePath) return;
     var encodedPath = encodeFilePath(filePath);
-    $('.nav-item-link').each(function () {
-        var href = $(this).attr('href') || '';
-        if (href.indexOf(encodedPath) >= 0 || href.indexOf(filePath) >= 0) {
-            $(this).addClass('active');
-            $(this).closest('.nav-group-items').show();
-            $(this).closest('.nav-group').find('.nav-group-title').first().removeClass('collapsed');
+    var normPath = String(filePath).replace(/\\/g, '/');
+    $('.nav-item-link').removeClass('active').each(function () {
+        var $link = $(this);
+        var linkFp = $link.data('filePath') || '';
+        var href = $link.attr('href') || '';
+        if ((linkFp && String(linkFp).replace(/\\/g, '/') === normPath) ||
+            href.indexOf(encodedPath) >= 0 || href.indexOf(filePath) >= 0) {
+            $link.addClass('active');
+            $link.closest('.nav-group-items').show();
+            $link.closest('.nav-group').find('.nav-group-title').first().removeClass('collapsed');
         }
     });
 }
@@ -331,9 +809,11 @@ function initializeProjectSwitcher() {
         filterFormTree($(this).val(), $('#project-menu-tree'));
     });
     $(document).on('click', function (event) {
-        if (!$(event.target).closest('#project-switcher').length) {
+        if (!$(event.target).closest('#project-switcher, .project-switcher').length) {
             $panel.prop('hidden', true);
             $trigger.attr('aria-expanded', 'false');
+            $('.project-switcher-panel').prop('hidden', true);
+            $('.project-switcher-trigger').attr('aria-expanded', 'false');
         }
     });
     $(document).on('keydown', function (event) {
@@ -388,23 +868,18 @@ function testConnection() {
 
 /**
  * P1-1: 从 searchable-select 组件解析最终提交值。
- *   - 已点选候选项：返回 option.data-value（如 DoctorID），不是显示文字。
- *   - allow_custom=true + 仅输入未点选：返回输入文字（已由 input 事件同步到 value 字段）。
- *   - allow_custom=false + 仅输入未点选：返回 ''（严格模式，拒绝未确认的搜索文字）。
- * 此函数逻辑可独立测试（参见 test_web_integration.py 中的合约断言）。
  */
 function resolveSearchableSelectValue($root) {
     return $root.find('.searchable-select-value').val() || '';
 }
 
-function collectParams() {
+function collectParams(context) {
+    var $ctx = context ? $(context) : (TabManager.getActivePane() || $(document));
     var params = {};
-    $('.param-input').each(function () {
+    $ctx.find('.param-input').each(function () {
         var $input = $(this);
         var name = $input.data('name');
         if (!name) return;
-        // searchable-select-value 已通过 initializeSearchableSelects 维护正确的提交值，
-        // 直接收集即可（allow_custom 语义在组件内部处理）。
         if ($input.is(':radio')) {
             if ($input.is(':checked')) params[name] = $input.val() || '';
         } else if ($input.is(':checkbox')) {
@@ -416,18 +891,16 @@ function collectParams() {
     return params;
 }
 
-function validateRequiredParams() {
+function validateRequiredParams($pane) {
+    $pane = $pane || (TabManager.getActivePane() || $(document));
     var valid = true;
-    $('.param-input[required]').each(function () {
+    $pane.find('.param-input[required]').each(function () {
         if (!this.checkValidity()) {
             valid = false;
             return false;
         }
     });
-    // P1-1: required 校验使用 resolveSearchableSelectValue，
-    //   allow_custom=true 时自定义非空输入满足 required；
-    //   allow_custom=false 时必须真正点选候选项（value 才非空）。
-    $('.searchable-select[data-required="1"]').each(function () {
+    $pane.find('.searchable-select[data-required="1"]').each(function () {
         var $root = $(this);
         if (!resolveSearchableSelectValue($root)) {
             valid = false;
@@ -436,70 +909,159 @@ function validateRequiredParams() {
         }
     });
     if (!valid) {
-        showInlineMessage('warning', '请先填写标记为必填的查询条件。');
+        showInlineMessage('warning', '请先填写标记为必填的查询条件。', $pane);
     }
     return valid;
 }
 
-function setQueryLoading(isLoading) {
-    var $button = $('#btn-execute');
+function setQueryLoading(isLoading, $pane) {
+    $pane = $pane || (TabManager.getActivePane() || $(document));
+    var $button = $pane.find('#btn-execute, .btn-execute, .btn-primary-action');
     $button.prop('disabled', isLoading);
     $button.find('.button-text').text(isLoading ? '查询中…' : '查询');
-    $('#loading').toggleClass('d-none', !isLoading);
-    if (isLoading) $('#btn-export').prop('disabled', true);
+    $pane.find('#loading, .spinner').toggleClass('d-none', !isLoading);
+    if (isLoading) $pane.find('#btn-export, .btn-export, .btn-secondary-action').prop('disabled', true);
 }
 
-function setExportLoading(isLoading) {
-    var $button = $('#btn-export');
-    $button.prop('disabled', isLoading || !lastQueryResult);
+function setExportLoading(isLoading, $pane, hasResult) {
+    $pane = $pane || (TabManager.getActivePane() || $(document));
+    var $button = $pane.find('#btn-export, .btn-export, .btn-secondary-action');
+    var disabled = isLoading || !(hasResult || lastQueryResult);
+    $button.prop('disabled', disabled);
     $button.find('.button-text').text(isLoading ? '导出中…' : '导出');
 }
 
-function executeQuery() {
-    var filePath = window.DBQUERY ? window.DBQUERY.filePath : '';
-    if (!filePath || $('#btn-execute').prop('disabled')) return;
-    if (!validateRequiredParams()) return;
+function resetQueryParams(tabId) {
+    var tab = tabId ? TabManager.tabs[tabId] : (TabManager.getActiveTab() || TabManager.getLegacyActiveTab());
+    if (!tab || !tab.$pane) return;
+    var $pane = tab.$pane;
 
-    clearInlineMessage();
-    clearResultWarning();
-    setQueryLoading(true);
-    $('#result-empty').hide();
-    $('#status-text').text('正在查询，请稍候…');
+    // 1. 重置日期
+    $pane.find('.param-input[type="date"]').each(function () {
+        var $input = $(this);
+        var def = $input.data('default');
+        $input.val(def === '{today}' ? todayStr() : (def || ''));
+    });
+
+    // 2. 重置日期时间
+    $pane.find('.param-input[type="datetime-local"]').each(function () {
+        var $input = $(this);
+        var def = $input.data('default');
+        $input.val(def === '{today}' ? nowStr() : (def || '').replace(' ', 'T'));
+    });
+
+    // 3. 重置文本框、数字框、多行文本框
+    $pane.find('.param-input[type="text"], .param-input[type="number"], textarea.param-input, input[type="hidden"].param-input:not(.searchable-select-value)').each(function () {
+        var $input = $(this);
+        var def = $input.data('default');
+        if (def === undefined || def === null || def === '{today}') def = '';
+        $input.val(def);
+    });
+
+    // 4. 重置复选框
+    $pane.find('.param-input[type="checkbox"]').each(function () {
+        var $input = $(this);
+        var def = String($input.data('default') || '').toLowerCase();
+        var isChecked = ['1', 'true', 'yes', 'on', '是'].indexOf(def) >= 0;
+        $input.prop('checked', isChecked);
+    });
+
+    // 5. 重置单选框
+    $pane.find('.radio-group').each(function () {
+        var $group = $(this);
+        var def = $group.data('default');
+        $group.find('.param-input[type="radio"]').each(function () {
+            var $radio = $(this);
+            $radio.prop('checked', $radio.val() === String(def));
+        });
+    });
+
+    // 6. 重置可搜索下拉框
+    $pane.find('.searchable-select').each(function () {
+        var $root = $(this);
+        var $input = $root.find('.searchable-select-input');
+        var $value = $root.find('.searchable-select-value');
+        var $menu = $root.find('.searchable-select-menu');
+        var defVal = $root.data('default');
+        if (defVal === undefined || defVal === null) defVal = '';
+
+        $value.val(defVal);
+        var $matchingOpt = $menu.find('.searchable-select-option').filter(function () {
+            return String($(this).data('value')) === String(defVal);
+        }).first();
+
+        if ($matchingOpt.length) {
+            $input.val($matchingOpt.text());
+            $menu.find('.searchable-select-option').attr('aria-selected', 'false');
+            $matchingOpt.attr('aria-selected', 'true');
+        } else {
+            $input.val(defVal);
+            $menu.find('.searchable-select-option').attr('aria-selected', 'false');
+        }
+    });
+
+    clearInlineMessage($pane);
+    clearResultWarning($pane);
+    showToast('查询条件已重置为默认值。', 'info');
+}
+
+function executeQuery(tabId) {
+    var tab = tabId ? TabManager.tabs[tabId] : (TabManager.getActiveTab() || TabManager.getLegacyActiveTab());
+    if (!tab || !tab.$pane) return;
+    var $pane = tab.$pane;
+    var filePath = tab.filePath || (window.DBQUERY ? window.DBQUERY.filePath : '');
+    var $btnExecute = $pane.find('#btn-execute, .btn-execute, .btn-primary-action');
+    if (!filePath || $btnExecute.prop('disabled')) return;
+    if (!validateRequiredParams($pane)) return;
+
+    clearInlineMessage($pane);
+    clearResultWarning($pane);
+    setQueryLoading(true, $pane);
+    $pane.find('#result-empty, .result-empty').hide();
+    $pane.find('#status-text, .result-status').text('正在查询，请稍候…');
+
+    var params = collectParams($pane);
 
     $.ajax({
         url: apiPath('/api/query'),
         method: 'POST',
         contentType: 'application/json',
-        data: JSON.stringify({file_path: filePath, params: collectParams()}),
+        data: JSON.stringify({file_path: filePath, params: params}),
         success: function (data) {
             if (data.error) {
-                handleQueryFailure(data.error);
+                handleQueryFailure(data.error, tab);
                 return;
             }
+            tab.lastQueryResult = data;
             lastQueryResult = data;
-            renderResult(data);
-            $('#status-text').text(querySummary(data));
-            setExportLoading(false);
+            renderResult(data, tab);
+            $pane.find('#status-text, .result-status').text(querySummary(data));
+            setExportLoading(false, $pane, true);
             if (data.truncated) {
-                setResultWarning('已显示前 ' + data.max_rows + ' 条，请缩小查询范围。');
+                setResultWarning('已显示前 ' + data.max_rows + ' 条，请缩小查询范围。', $pane);
             }
         },
         error: function (xhr) {
-            getRequestError(xhr, '查询失败，请稍后重试。').then(handleQueryFailure);
+            getRequestError(xhr, '查询失败，请稍后重试。').then(function (msg) {
+                handleQueryFailure(msg, tab);
+            });
         },
         complete: function () {
-            setQueryLoading(false);
+            setQueryLoading(false, $pane);
         }
     });
 }
 
-function handleQueryFailure(message) {
+function handleQueryFailure(message, tab) {
+    tab = tab || (TabManager.getActiveTab() || TabManager.getLegacyActiveTab());
+    var $pane = tab && tab.$pane ? tab.$pane : $(document);
+    if (tab) tab.lastQueryResult = null;
     lastQueryResult = null;
-    clearResultWarning();
-    setExportLoading(false);
-    $('#status-text').text('查询未完成');
-    $('#result-empty').text('暂无符合条件的数据').show();
-    showInlineMessage('error', message || '查询失败，请稍后重试。');
+    clearResultWarning($pane);
+    setExportLoading(false, $pane, false);
+    $pane.find('#status-text, .result-status').text('查询未完成');
+    $pane.find('#result-empty, .result-empty').text('暂无符合条件的数据').show();
+    showInlineMessage('error', message || '查询失败，请稍后重试。', $pane);
 }
 
 function querySummary(data) {
@@ -509,14 +1071,19 @@ function querySummary(data) {
     return summary;
 }
 
-function renderResult(data) {
-    var $table = $('#result-table');
-    if (dataTable) {
-        dataTable.destroy();
+function renderResult(data, tab) {
+    tab = tab || (TabManager ? TabManager.getActiveTab() : null) || TabManager.getLegacyActiveTab();
+    var $pane = tab && tab.$pane ? tab.$pane : $(document);
+    var $table = $pane.find('#result-table, .result-table').first();
+
+    if (tab && tab.dataTable) {
+        try { tab.dataTable.destroy(); } catch (ignore) {}
+        tab.dataTable = null;
+    } else if (dataTable) {
+        try { dataTable.destroy(); } catch (ignore) {}
         dataTable = null;
     }
 
-    // DataTables destroy 后保留或显式恢复标准 table 结构，不能清空整个 table。
     var $thead = $table.children('thead');
     var $tbody = $table.children('tbody');
     if (!$thead.length) {
@@ -550,7 +1117,7 @@ function renderResult(data) {
     }
     $tbody.html(body);
 
-    dataTable = $table.DataTable({
+    var dt = $table.DataTable({
         paging: true,
         pageLength: 100,
         lengthMenu: [50, 100, 200, 500, 1000],
@@ -572,19 +1139,30 @@ function renderResult(data) {
             zeroRecords: '暂无符合条件的数据'
         }
     });
-    bindResultGridLayout();
+
+    if (tab) {
+        tab.dataTable = dt;
+    }
+    dataTable = dt;
+    bindResultGridLayout(tab);
     if (data.row_count) {
-        $('#result-empty').hide();
+        $pane.find('#result-empty, .result-empty').hide();
     } else {
-        $('#result-empty').text('暂无符合条件的数据').show();
+        $pane.find('#result-empty, .result-empty').text('暂无符合条件的数据').show();
     }
 }
 
-function exportExcel() {
-    if (!lastQueryResult || $('#btn-export').prop('disabled')) return;
-    var filePath = window.DBQUERY ? window.DBQUERY.filePath : '';
-    setExportLoading(true);
-    $('#status-text').text('正在生成导出文件…');
+function exportExcel(tabId) {
+    var tab = tabId ? TabManager.tabs[tabId] : (TabManager.getActiveTab() || TabManager.getLegacyActiveTab());
+    if (!tab || !tab.$pane) return;
+    var $pane = tab.$pane;
+    var resultData = tab.lastQueryResult || lastQueryResult;
+    var $btnExport = $pane.find('#btn-export, .btn-export, .btn-secondary-action');
+    if (!resultData || $btnExport.prop('disabled')) return;
+
+    var filePath = tab.filePath || (window.DBQUERY ? window.DBQUERY.filePath : '');
+    setExportLoading(true, $pane, true);
+    $pane.find('#status-text, .result-status').text('正在生成导出文件…');
 
     $.ajax({
         url: apiPath('/api/export'),
@@ -592,10 +1170,10 @@ function exportExcel() {
         contentType: 'application/json',
         data: JSON.stringify({
             file_path: filePath,
-            params: collectParams(),
-            columns: lastQueryResult.columns,
-            rows: lastQueryResult.rows,
-            elapsed: lastQueryResult.elapsed
+            params: collectParams($pane),
+            columns: resultData.columns,
+            rows: resultData.rows,
+            elapsed: resultData.elapsed
         }),
         xhrFields: {responseType: 'blob'},
         success: function (blob, status, xhr) {
@@ -607,17 +1185,17 @@ function exportExcel() {
             link.click();
             document.body.removeChild(link);
             window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
-            $('#status-text').text('导出文件已生成，正在下载。');
+            $pane.find('#status-text, .result-status').text('导出文件已生成，正在下载。');
             showToast('导出文件已生成，正在下载。', 'success');
         },
         error: function (xhr) {
             getRequestError(xhr, '导出失败，请稍后重试。').then(function (message) {
-                $('#status-text').text('导出未完成');
-                showInlineMessage('error', message);
+                $pane.find('#status-text, .result-status').text('导出未完成');
+                showInlineMessage('error', message, $pane);
             });
         },
         complete: function () {
-            setExportLoading(false);
+            setExportLoading(false, $pane, true);
         }
     });
 }
@@ -658,8 +1236,9 @@ function extractDownloadFileName(xhr) {
     return filenameMatch && filenameMatch[1] ? filenameMatch[1] : '';
 }
 
-function showInlineMessage(type, message) {
-    var $message = $('#result-message');
+function showInlineMessage(type, message, $pane) {
+    $pane = $pane || (TabManager ? TabManager.getActivePane() : null) || $(document);
+    var $message = $pane.find('#result-message, .inline-message').first();
     if (!$message.length) {
         showToast(message, type);
         return;
@@ -669,27 +1248,46 @@ function showInlineMessage(type, message) {
         .text(message);
 }
 
-function clearInlineMessage() {
-    $('#result-message').addClass('d-none').removeClass('message-warning message-error message-success').text('');
+function clearInlineMessage($pane) {
+    $pane = $pane || (TabManager ? TabManager.getActivePane() : null) || $(document);
+    $pane.find('#result-message, .inline-message')
+        .addClass('d-none')
+        .removeClass('message-warning message-error message-success')
+        .text('');
 }
 
-function setResultWarning(message) {
-    $('#result-warning').removeClass('d-none').text(message || '');
+function setResultWarning(message, $pane) {
+    $pane = $pane || (TabManager ? TabManager.getActivePane() : null) || $(document);
+    $pane.find('#result-warning, .result-warning')
+        .removeClass('d-none')
+        .text(message || '');
 }
 
-function clearResultWarning() {
-    $('#result-warning').addClass('d-none').text('');
+function clearResultWarning($pane) {
+    $pane = $pane || (TabManager ? TabManager.getActivePane() : null) || $(document);
+    $pane.find('#result-warning, .result-warning')
+        .addClass('d-none')
+        .text('');
 }
 
-function bindResultGridLayout() {
+function bindResultGridLayout(tab) {
     $(window).off('resize.resultGridLayout').on('resize.resultGridLayout', function () {
         window.clearTimeout(resultGridResizeTimer);
         resultGridResizeTimer = window.setTimeout(function () {
-            if (dataTable) dataTable.columns.adjust();
+            var curTab = TabManager ? TabManager.getActiveTab() : null;
+            if (curTab && curTab.dataTable) {
+                try { curTab.dataTable.columns.adjust(); } catch (ignore) {}
+            } else if (dataTable) {
+                try { dataTable.columns.adjust(); } catch (ignore) {}
+            }
         }, 120);
     });
     window.setTimeout(function () {
-        if (dataTable) dataTable.columns.adjust();
+        if (tab && tab.dataTable) {
+            try { tab.dataTable.columns.adjust(); } catch (ignore) {}
+        } else if (dataTable) {
+            try { dataTable.columns.adjust(); } catch (ignore) {}
+        }
     }, 0);
 }
 
@@ -718,12 +1316,16 @@ function esc(value) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+function padZero(num) {
+    return ('0' + num).slice(-2);
+}
+
 function todayStr() {
     var date = new Date();
-    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+    return date.getFullYear() + '-' + padZero(date.getMonth() + 1) + '-' + padZero(date.getDate());
 }
 
 function nowStr() {
     var date = new Date();
-    return todayStr() + 'T' + String(date.getHours()).padStart(2, '0') + ':' + String(date.getMinutes()).padStart(2, '0');
+    return todayStr() + 'T' + padZero(date.getHours()) + ':' + padZero(date.getMinutes());
 }

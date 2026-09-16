@@ -22,7 +22,34 @@
     {% endif %}
 
     <section class="app-main">
-        <header class="page-header">
+        <div class="app-tabbar-container">
+            <div class="app-tabbar" id="app-tabbar" role="tablist" aria-label="报表标签页">
+                <div class="tab-item" role="tab" id="tab-btn-welcome" data-tab-id="tab-welcome" aria-selected="false" aria-controls="pane-tab-welcome" title="欢迎主页">
+                    <svg class="icon tab-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    <span class="tab-title">欢迎</span>
+                </div>
+                <div class="tab-item active" role="tab" id="tab-btn-init" data-tab-id="tab-init" data-file-path="{{ file_path }}" aria-selected="true" aria-controls="pane-tab-init" title="{{ form.title }}">
+                    <svg class="icon tab-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    <span class="tab-title">{{ form.title }}</span>
+                    <button class="tab-close" type="button" title="关闭标签页" aria-label="关闭 {{ form.title }} 标签页">×</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-panes-container" id="tab-panes-container">
+            <div class="tab-pane" id="pane-tab-welcome" data-tab-id="tab-welcome" style="display:none;" role="tabpanel" aria-labelledby="tab-btn-welcome">
+                <header class="page-header">
+                    <div>
+                        <h1 class="page-title">综合查询</h1>
+                        <p class="page-desc">请从左侧或下方卡片选择查询项目，支持多标签同时查询与对比。</p>
+                    </div>
+                </header>
+                <div class="welcome-quick-links" id="welcome-quick-links">
+                    <div class="compact-empty-state">正在加载报表列表…</div>
+                </div>
+            </div>
+            <div class="tab-pane active" id="pane-tab-init" data-tab-id="tab-init" data-file-path="{{ file_path }}" role="tabpanel" aria-labelledby="tab-btn-init">
+                <header class="page-header">
             <div class="page-heading-left">
                 <a class="report-home-link"
                    href="{{ url_for('index', embed=1, hide_header=1, sidebar=0) if embed_mode else url_for('index') }}"
@@ -123,6 +150,10 @@
                     <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
                     <span class="button-text">查询</span>
                 </button>
+                <button class="btn btn-reset-action" id="btn-reset" type="button" onclick="resetQueryParams()" title="清空并重置为初始默认条件">
+                    <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                    <span class="button-text">重置</span>
+                </button>
                 <button class="btn btn-secondary-action" id="btn-export" type="button" onclick="exportExcel()" disabled>
                     <svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14v5h14v-5"/></svg>
                     <span class="button-text">导出</span>
@@ -147,6 +178,8 @@
                 <div class="result-empty" id="result-empty">设置查询条件后点击“查询”</div>
             </div>
         </section>
+            </div>
+        </div>
     </section>
 </div>
 
