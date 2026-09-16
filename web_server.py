@@ -576,6 +576,16 @@ def get_form_from_path(file_path):
     except ValueError:
         is_form_path = False
     if not is_form_path or not abs_path.lower().endswith('.qry') or not os.path.isfile(abs_path):
+        try:
+            alt = decoded_path.encode('latin-1').decode('utf-8')
+            alt_abs = os.path.realpath(os.path.join(BASE_DIR, alt))
+            if os.path.commonpath([forms_root, alt_abs]) == forms_root and alt_abs.lower().endswith('.qry') and os.path.isfile(alt_abs):
+                decoded_path = alt
+                abs_path = alt_abs
+                is_form_path = True
+        except Exception:
+            pass
+    if not is_form_path or not abs_path.lower().endswith('.qry') or not os.path.isfile(abs_path):
         return None, decoded_path, None
     form = FormParser.parse_file(abs_path)
     if not bool(getattr(form, 'web_enabled', False)):

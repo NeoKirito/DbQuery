@@ -210,6 +210,33 @@ SELECT 1 AS Result
         self.assertNotIn('logo.png', html_embed_login)
         self.assertNotIn('favicon.ico', html_embed_login)
 
+    def test_compact_heading_and_result_toolbar(self):
+        # 1. 查询页模板包含整合进 conditions-heading 的按钮与 result-dt-tools 插槽
+        self._authenticate()
+        res_query = self.client.get('/query/{}'.format(self.file_path))
+        self.assertEqual(res_query.status_code, 200)
+        html_query = res_query.get_data(as_text=True)
+        self.assertIn('class="section-heading conditions-heading"', html_query)
+        self.assertIn('class="conditions-actions"', html_query)
+        self.assertIn('result-dt-tools', html_query)
+
+        # 2. CSS 包含紧凑工具栏样式
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        css_path = os.path.join(root, 'static', 'css', 'style.css')
+        with open(css_path, encoding='utf-8') as f:
+            css = f.read()
+        self.assertIn('.conditions-heading', css)
+        self.assertIn('.conditions-actions', css)
+        self.assertIn('.result-dt-tools', css)
+
+        # 3. JS 包含动态 Tab 与 DataTables 工具栏移动逻辑
+        js_path = os.path.join(root, 'static', 'js', 'app.js')
+        with open(js_path, encoding='utf-8') as f:
+            js = f.read()
+        self.assertIn('conditions-actions', js)
+        self.assertIn('result-dt-tools', js)
+
 
 if __name__ == '__main__':
     unittest.main()
+

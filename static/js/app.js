@@ -344,15 +344,9 @@ var TabManager = {
         html += '</header>';
 
         html += '<section class="business-section conditions-section" aria-labelledby="conditions-heading-' + tabId + '">';
-        html += '<div class="section-heading" id="conditions-heading-' + tabId + '">查询条件</div>';
-        if (form.params && form.params.length) {
-            html += '<div class="params-grid">';
-            for (var i = 0; i < form.params.length; i++) {
-                html += renderParamHtml(form.params[i], tabId, i + 1);
-            }
-            html += '</div>';
-        }
-        html += '<div class="action-bar">';
+        html += '<div class="section-heading conditions-heading" id="conditions-heading-' + tabId + '">';
+        html += '<span class="heading-title">查询条件</span>';
+        html += '<div class="conditions-actions">';
         html += '<button class="btn btn-primary-action btn-execute" type="button" onclick="executeQuery(\'' + tabId + '\')">';
         html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>';
         html += '<span class="button-text">查询</span></button>';
@@ -363,13 +357,22 @@ var TabManager = {
         html += '<svg class="icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3v11m0 0 4-4m-4 4-4-4"/><path d="M5 14v5h14v-5"/></svg>';
         html += '<span class="button-text">导出</span></button>';
         html += '<span class="spinner d-none" aria-label="正在查询"></span>';
-        html += '</div></section>';
+        html += '</div></div>';
+        if (form.params && form.params.length) {
+            html += '<div class="params-grid">';
+            for (var i = 0; i < form.params.length; i++) {
+                html += renderParamHtml(form.params[i], tabId, i + 1);
+            }
+            html += '</div>';
+        }
+        html += '</section>';
 
         html += '<section class="business-section result-section" aria-labelledby="result-heading-' + tabId + '">';
         html += '<div class="section-heading result-heading" id="result-heading-' + tabId + '">';
         html += '<div class="result-heading-left"><span class="result-title">查询结果</span>';
+        html += '<span class="action-status result-status" aria-live="polite"></span>';
         html += '<span class="result-warning d-none" aria-live="polite"></span></div>';
-        html += '<span class="action-status result-status" aria-live="polite"></span></div>';
+        html += '<div class="result-heading-right result-dt-tools"></div></div>';
         html += '<div class="inline-message d-none" role="status"></div>';
         html += '<div class="result-panel">';
         html += '<table class="display result-table" style="width:100%"><thead></thead><tbody></tbody></table>';
@@ -1333,6 +1336,7 @@ function renderResult(data, tab) {
         try { dataTable.destroy(); } catch (ignore) {}
         dataTable = null;
     }
+    $pane.find('.result-heading .result-dt-tools').empty();
 
     var $thead = $table.children('thead');
     var $tbody = $table.children('tbody');
@@ -1389,6 +1393,13 @@ function renderResult(data, tab) {
             zeroRecords: '暂无符合条件的数据'
         }
     });
+
+    var $toolsTarget = $pane.find('.result-heading .result-dt-tools');
+    var $topbar = $pane.find('.dataTables_wrapper .dt-topbar');
+    if ($toolsTarget.length && $topbar.length) {
+        $toolsTarget.empty().append($topbar.children());
+        $topbar.remove();
+    }
 
     if (tab) {
         tab.dataTable = dt;
