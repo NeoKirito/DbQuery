@@ -702,15 +702,17 @@ def login():
 
     next_url = _safe_next_url(request.values.get('next'))
     error = ''
+    page_context = get_embed_context()
+    page_context['page_name'] = 'login'
     if request.method == 'POST':
         if request.form.get('csrf_token', '') != session.get('csrf_token', ''):
             return render_template('login.html', error=u'登录页面已失效，请刷新后重试。',
                                    next_url=next_url, csrf_token=_csrf_token(),
-                                   page_name='login'), 400
+                                   **page_context), 400
         if not _login_allowed():
             return render_template('login.html', error=u'登录尝试过于频繁，请稍后再试。',
                                    next_url=next_url, csrf_token=_csrf_token(),
-                                   page_name='login'), 429
+                                   **page_context), 429
 
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '')
@@ -725,7 +727,7 @@ def login():
         error = u'账号、密码无效，账号可能未启用，或数据服务暂不可用。'
 
     return render_template('login.html', error=error, next_url=next_url,
-                           csrf_token=_csrf_token(), page_name='login')
+                           csrf_token=_csrf_token(), **page_context)
 
 
 @app.route('/logout', methods=['POST'])

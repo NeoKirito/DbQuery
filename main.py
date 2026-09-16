@@ -80,6 +80,12 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1000, 680)
         self.resize(1300, 820)
 
+        app_icon_path = os.path.join(BASE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if os.path.exists(app_icon_path):
+            self.setWindowIcon(QIcon(app_icon_path))
+
         self._setup_ui()
         self._load_forms()
 
@@ -467,6 +473,11 @@ def main():
     try:
         app = QApplication(sys.argv)
         app.setStyle('Fusion')
+        app_icon_path = os.path.join(BASE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if os.path.exists(app_icon_path):
+            app.setWindowIcon(QIcon(app_icon_path))
         logger.info("QApplication created")
     except Exception as e:
         logger.error("Failed to create QApplication: %s", str(e))

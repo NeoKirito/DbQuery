@@ -74,6 +74,8 @@ a = Analysis(
         ('forms', 'defaults/forms'),
         ('templates', 'templates'),
         ('static', 'static'),
+        ('app.ico', '.'),
+        ('app.png', '.'),
     ],
     hiddenimports=[
         'pyodbc',
@@ -135,7 +137,7 @@ exe = EXE(
     strip=False,
     upx=False,          # Win7 必须关闭 UPX
     console=False,
-    icon=None,
+    icon='app.ico',
 )
 
 coll = COLLECT(

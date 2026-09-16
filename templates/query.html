@@ -39,9 +39,14 @@
         <div class="tab-panes-container" id="tab-panes-container">
             <div class="tab-pane" id="pane-tab-welcome" data-tab-id="tab-welcome" style="display:none;" role="tabpanel" aria-labelledby="tab-btn-welcome">
                 <header class="page-header">
-                    <div>
-                        <h1 class="page-title">综合查询</h1>
-                        <p class="page-desc">请从左侧或下方卡片选择查询项目，支持多标签同时查询与对比。</p>
+                    <div class="page-header-title-group" style="display: flex; align-items: center; gap: 14px;">
+                        {% if not embed_mode and not hide_header %}
+                        <img src="{{ url_for('static', filename='logo.png') }}" alt="Logo" class="brand-logo" width="44" height="44" style="border-radius: 50%; box-shadow: 0 2px 8px rgba(26, 110, 181, 0.16); flex-shrink: 0;">
+                        {% endif %}
+                        <div>
+                            <h1 class="page-title">综合查询</h1>
+                            <p class="page-desc">请从左侧或下方卡片选择查询项目，支持多标签同时查询与对比。</p>
+                        </div>
                     </div>
                 </header>
                 <div class="welcome-quick-links" id="welcome-quick-links">

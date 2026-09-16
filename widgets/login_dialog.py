@@ -1,6 +1,8 @@
-# -*- coding: utf-8 -*-
-"""桌面版登录对话框。"""
+import os
+import sys
+
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon, QPixmap
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QLineEdit, QLabel, QPushButton,
     QHBoxLayout, QMessageBox
@@ -8,6 +10,11 @@ from PyQt5.QtWidgets import (
 
 from db_manager import DBManager
 from widgets.config_dialog import ConfigDialog
+
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class LoginDialog(QDialog):
@@ -20,12 +27,30 @@ class LoginDialog(QDialog):
         self.setWindowTitle(u'登录数据库查询工具')
         self.setModal(True)
         self.setFixedWidth(390)
+
+        app_icon_path = os.path.join(BASE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if os.path.exists(app_icon_path):
+            self.setWindowIcon(QIcon(app_icon_path))
+
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 22)
         layout.setSpacing(12)
+
+        # ── Logo 图标（圆形无背景）──
+        logo_path = os.path.join(BASE_DIR, 'app.png')
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(BASE_DIR, 'static', 'logo.png')
+        if os.path.exists(logo_path):
+            logo_lbl = QLabel()
+            pix = QPixmap(logo_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_lbl.setPixmap(pix)
+            logo_lbl.setAlignment(Qt.AlignCenter)
+            layout.addWidget(logo_lbl)
 
         title = QLabel(u'数据库查询工具')
         title.setAlignment(Qt.AlignCenter)

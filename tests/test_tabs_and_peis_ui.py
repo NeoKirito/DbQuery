@@ -113,6 +113,64 @@ SELECT 1 AS Result
         self.assertIn('closeTab', js)
         self.assertIn('activateTab', js)
 
+    def test_logo_assets_exist_and_are_valid(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        app_ico = os.path.join(root, 'app.ico')
+        app_png = os.path.join(root, 'app.png')
+        logo_png = os.path.join(root, 'static', 'logo.png')
+        favicon_ico = os.path.join(root, 'static', 'favicon.ico')
+
+        self.assertTrue(os.path.isfile(app_ico), 'app.ico must exist')
+        self.assertTrue(os.path.isfile(app_png), 'app.png must exist')
+        self.assertTrue(os.path.isfile(logo_png), 'static/logo.png must exist')
+        self.assertTrue(os.path.isfile(favicon_ico), 'static/favicon.ico must exist')
+
+        self.assertGreater(os.path.getsize(app_ico), 1000)
+        self.assertGreater(os.path.getsize(app_png), 1000)
+        self.assertGreater(os.path.getsize(logo_png), 1000)
+        self.assertGreater(os.path.getsize(favicon_ico), 1000)
+
+    def test_logo_rendered_in_standalone_and_strictly_omitted_in_embed_mode(self):
+        # 1. 独立首页：包含 logo.png 与 favicon.ico
+        res_index = self.client.get('/')
+        self.assertEqual(res_index.status_code, 200)
+        html_index = res_index.get_data(as_text=True)
+        self.assertIn('logo.png', html_index)
+        self.assertIn('favicon.ico', html_index)
+
+        # 2. 独立登录页：包含 logo.png 与 favicon.ico
+        with self.client.session_transaction() as s:
+            s.clear()
+        res_login = self.client.get('/login')
+        self.assertEqual(res_login.status_code, 200)
+        html_login = res_login.get_data(as_text=True)
+        self.assertIn('logo.png', html_login)
+        self.assertIn('favicon.ico', html_login)
+
+        # 3. 嵌入模式首页：绝对不包含 logo.png，也不包含 favicon.ico
+        self._authenticate()
+        res_embed_index = self.client.get('/?embed=1')
+        self.assertEqual(res_embed_index.status_code, 200)
+        html_embed_index = res_embed_index.get_data(as_text=True)
+        self.assertNotIn('logo.png', html_embed_index)
+        self.assertNotIn('favicon.ico', html_embed_index)
+
+        # 4. 嵌入模式查询页：绝对不包含 logo.png，也不包含 favicon.ico
+        res_embed_query = self.client.get('/query/{}?embed=1'.format(self.file_path))
+        self.assertEqual(res_embed_query.status_code, 200)
+        html_embed_query = res_embed_query.get_data(as_text=True)
+        self.assertNotIn('logo.png', html_embed_query)
+        self.assertNotIn('favicon.ico', html_embed_query)
+
+        # 5. 嵌入模式登录页：绝对不包含 logo.png，也不包含 favicon.ico
+        with self.client.session_transaction() as s:
+            s.clear()
+        res_embed_login = self.client.get('/login?embed=1')
+        self.assertEqual(res_embed_login.status_code, 200)
+        html_embed_login = res_embed_login.get_data(as_text=True)
+        self.assertNotIn('logo.png', html_embed_login)
+        self.assertNotIn('favicon.ico', html_embed_login)
+
 
 if __name__ == '__main__':
     unittest.main()
