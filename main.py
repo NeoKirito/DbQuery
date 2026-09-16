@@ -602,9 +602,19 @@ class MainWindow(QMainWindow):
                 break
 
     def _edit_form_by_path(self, form):
+        old_path = form.file_path
         dlg = FormEditorDialog(form, FORMS_DIR, self)
         if dlg.exec_():
+            if old_path != form.file_path:
+                for i in range(self.tab_widget.count() - 1, -1, -1):
+                    w = self.tab_widget.widget(i)
+                    if isinstance(w, QueryTab) and w.form.file_path == old_path:
+                        self.tab_widget.removeTab(i)
+                        break
             self._on_form_modified(form.file_path)
+            target_group = getattr(dlg, 'saved_group', None) or form.group
+            if target_group:
+                self._select_group_in_tree(target_group, file_path=form.file_path)
 
     def _delete_form(self, form):
         reply = QMessageBox.question(

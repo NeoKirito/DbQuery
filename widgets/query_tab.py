@@ -903,10 +903,17 @@ class QueryTab(QWidget):
 
     # ── 编辑表单 ──────────────────────────────
     def _edit_form(self):
+        old_path = self.form.file_path
         from widgets.form_editor import FormEditorDialog
         dlg = FormEditorDialog(self.form, self.forms_dir, self)
         if dlg.exec_():
             # 通知主窗口重新加载该表单
+            if old_path != self.form.file_path and hasattr(self, 'parent_window') and self.parent_window:
+                for i in range(self.parent_window.tab_widget.count() - 1, -1, -1):
+                    w = self.parent_window.tab_widget.widget(i)
+                    if isinstance(w, QueryTab) and w.form.file_path == old_path:
+                        self.parent_window.tab_widget.removeTab(i)
+                        break
             self.form_modified.emit(self.form.file_path)
 
     # ── 窗口关闭事件（清理 worker）─────────────

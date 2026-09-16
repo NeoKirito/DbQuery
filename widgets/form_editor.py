@@ -15,7 +15,7 @@ from PyQt5.QtGui import (
     QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QFontMetrics
 )
 from form_parser import TEMPLATE, FormParser
-from core.param_service import validate_options_sql
+from core.param_service import validate_options_sql, sql_placeholders
 
 
 # ──────────────────────────────────────────────
@@ -89,15 +89,18 @@ class QryHighlighter(QSyntaxHighlighter):
 # ──────────────────────────────────────────────
 class FormEditorDialog(QDialog):
 
-    def __init__(self, form, forms_dir, parent=None, default_group=None):
+    def __init__(self, form, forms_dir, parent=None, default_group=None, db_manager=None):
         """
         form          : QueryForm（编辑已有表单）或 None（新建）
         forms_dir     : forms 根目录路径
         default_group : 预选分组名称（新建表单时）
+        db_manager    : 可选的数据库管理器实例
         """
         super(FormEditorDialog, self).__init__(parent)
         self.form          = form
         self.forms_dir     = forms_dir
+        self.parent_window = parent
+        self.db_manager    = db_manager or getattr(parent, 'db_manager', None)
         self.default_group = default_group or (form.group if form else '默认')
         self.setWindowTitle("编辑表单" if form else "新建表单")
         self.setMinimumSize(720, 600)
@@ -128,45 +131,55 @@ class FormEditorDialog(QDialog):
         top_row.addWidget(help_btn)
         layout.addLayout(top_row)
 
-        # 新建表单时显示"保存位置"区域
+        # 表单属性与所属分组设置（新建和编辑模式均支持下拉选择或输入分组）
+        info_grp = QGroupBox("表单信息与所属分组")
+        info_form = QFormLayout(info_grp)
+        info_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        info_form.setContentsMargins(10, 8, 10, 8)
+        info_form.setVerticalSpacing(6)
+
+        # 所属分组下拉框（可编辑下拉框）
+        self.group_combo = QComboBox()
+        self.group_combo.setEditable(True)
+        self.group_combo.setInsertPolicy(QComboBox.NoInsert)
+        self.group_combo.setToolTip("可直接下拉选择已有分组，或直接输入新分组名称（保存时将自动归入对应文件夹）")
+
+        existing_groups = []
+        if os.path.isdir(self.forms_dir):
+            for name in sorted(os.listdir(self.forms_dir)):
+                full = os.path.join(self.forms_dir, name)
+                if os.path.isdir(full) and not name.startswith(('.', '_')):
+                    existing_groups.append(name)
+        if '默认' not in existing_groups:
+            existing_groups.insert(0, '默认')
+        if self.form and self.form.group and self.form.group not in existing_groups:
+            existing_groups.append(self.form.group)
+        self.group_combo.addItems(existing_groups)
+
+        initial_group = (self.form.group if self.form and self.form.group else self.default_group) or '默认'
+        idx = self.group_combo.findText(initial_group)
+        if idx >= 0:
+            self.group_combo.setCurrentIndex(idx)
+        else:
+            self.group_combo.setEditText(initial_group)
+
+        self.group_combo.currentTextChanged.connect(self._on_group_combo_changed)
+
+        group_row = QHBoxLayout()
+        group_row.addWidget(self.group_combo, stretch=1)
+        group_hint = QLabel("（可下拉选择已有分组，或直接输入新分组名称）")
+        group_hint.setStyleSheet("color: #7A869A; font-size: 11px;")
+        group_row.addWidget(group_hint)
+        info_form.addRow("所属分组:", group_row)
+
         if not self.form:
-            loc_grp = QGroupBox("保存位置")
-            loc_form = QFormLayout(loc_grp)
-            loc_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-            self.group_combo = QComboBox()
-            self.group_combo.setEditable(True)
-            self.group_combo.setInsertPolicy(QComboBox.NoInsert)
-            self.group_combo.setToolTip("可直接下拉选择已有分组，或直接输入新分组名称（保存时将自动创建新文件夹）")
-
-            existing_groups = []
-            if os.path.isdir(self.forms_dir):
-                for name in sorted(os.listdir(self.forms_dir)):
-                    full = os.path.join(self.forms_dir, name)
-                    if os.path.isdir(full) and not name.startswith(('.', '_')):
-                        existing_groups.append(name)
-            if not existing_groups:
-                existing_groups = ['默认']
-            self.group_combo.addItems(existing_groups)
-
-            idx = self.group_combo.findText(self.default_group)
-            if idx >= 0:
-                self.group_combo.setCurrentIndex(idx)
-            else:
-                self.group_combo.setEditText(self.default_group)
-
-            self.group_combo.currentTextChanged.connect(self._on_group_combo_changed)
-
             self.filename_edit = QLineEdit()
             self.filename_edit.setPlaceholderText("文件名（不含 .qry 扩展名）")
-
-            group_hint = QLabel("（可下拉选择已有分组，或直接输入新分组名称）")
-            group_hint.setStyleSheet("color: #7A869A; font-size: 11px;")
-
-            loc_form.addRow("所属分组:", self.group_combo)
-            loc_form.addRow("", group_hint)
-            loc_form.addRow("文件名称:", self.filename_edit)
-            layout.addWidget(loc_grp)
+            info_form.addRow("文件名称:", self.filename_edit)
+        else:
+            self.filename_label = QLabel(os.path.basename(self.form.file_path))
+            self.filename_label.setStyleSheet("color: #333; font-weight: bold;")
+            info_form.addRow("当前文件:", self.filename_label)
 
         access_row = QHBoxLayout()
         self.web_enabled_check = QCheckBox(u"允许已登录 Web 用户查看此表单")
@@ -179,7 +192,9 @@ class FormEditorDialog(QDialog):
         access_row.addWidget(self.web_enabled_check)
         access_row.addWidget(access_hint)
         access_row.addStretch()
-        layout.addLayout(access_row)
+        info_form.addRow("Web 权限:", access_row)
+
+        layout.addWidget(info_grp)
 
         # 编辑器
         self.editor = QPlainTextEdit()
@@ -198,10 +213,22 @@ class FormEditorDialog(QDialog):
         self.cursor_lbl.setStyleSheet("color: #666; font-size: 11px;")
         self.editor.cursorPositionChanged.connect(self._update_cursor_pos)
 
-        # 底部按钮
+        # 底部按钮栏
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.cursor_lbl)
         btn_row.addStretch()
+
+        # 保存退出时校验复选框（默认勾选）
+        self.validate_on_save_check = QCheckBox("保存退出时校验")
+        self.validate_on_save_check.setChecked(True)
+        self.validate_on_save_check.setToolTip("勾选后，点击保存时将先自动执行完整校验；若存在错误将阻止保存")
+        btn_row.addWidget(self.validate_on_save_check)
+
+        # 独立校验按钮
+        self.validate_btn = QPushButton("校验")
+        self.validate_btn.setToolTip("单独校验当前表单配置与 SQL 脚本，不保存退出")
+        self.validate_btn.clicked.connect(self._on_validate_clicked)
+        btn_row.addWidget(self.validate_btn)
 
         if self.form:
             save_as_btn = QPushButton("另存为...")
@@ -233,15 +260,36 @@ class FormEditorDialog(QDialog):
     def _load_form_file(self):
         try:
             with open(self.form.file_path, 'r', encoding='utf-8-sig') as f:
-                self.editor.setPlainText(f.read())
+                raw_text = f.read()
+            self.editor.setPlainText(raw_text)
             self.web_enabled_check.setChecked(bool(getattr(self.form, 'web_enabled', False)))
+
+            # 从文件 [meta] 或 self.form 中回填分组到下拉框
+            grp = getattr(self.form, 'group', None) or '默认'
+            meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', raw_text, re.DOTALL | re.IGNORECASE)
+            if meta_m:
+                for line in meta_m.group(1).splitlines():
+                    line = line.strip()
+                    if line.startswith(('#', ';')):
+                        continue
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        if k.strip().lower() == 'group' and v.strip():
+                            grp = v.strip()
+                            break
+
+            self.group_combo.blockSignals(True)
+            idx = self.group_combo.findText(grp)
+            if idx >= 0:
+                self.group_combo.setCurrentIndex(idx)
+            else:
+                self.group_combo.setEditText(grp)
+            self.group_combo.blockSignals(False)
         except Exception as e:
             QMessageBox.warning(self, "读取失败", "无法读取文件：\n{}".format(e))
 
     def _on_group_combo_changed(self, new_group):
         """当用户切换或修改所属分组时，同步更新编辑器 [meta] 中的 group 属性"""
-        if self.form:
-            return
         new_group = new_group.strip() or '默认'
         content = self.editor.toPlainText()
         updated = self._apply_group(content, new_group)
@@ -285,46 +333,200 @@ class FormEditorDialog(QDialog):
         start, end = meta_m.span(1)
         return content[:start] + meta_body + content[end:]
 
+    def validate_form(self, content=None):
+        """
+        校验表单元信息、参数定义与 SQL 脚本。
+        返回 (is_valid: bool, errors: list[str], warnings: list[str])
+        """
+        if content is None:
+            content = self.editor.toPlainText()
+
+        errors = []
+        warnings = []
+
+        if not content or not content.strip():
+            errors.append("表单内容为空")
+            return False, errors, warnings
+
+        # 1. 提取各配置段
+        meta_section = FormParser._get_section(content, 'meta')
+        params_section = FormParser._get_section(content, 'params')
+        sql_section = FormParser._get_section(content, 'sql')
+
+        if not meta_section:
+            warnings.append("未找到 [meta] 配置段，建议补充表单元数据（title、group 等）")
+
+        if not sql_section:
+            errors.append("未找到 [sql] 配置段，表单必须包含 SQL 执行脚本")
+
+        # 2. 校验 [meta]
+        query_type = 'select'
+        meta_title = ''
+        if meta_section:
+            for line in meta_section.splitlines():
+                line = line.strip()
+                if not line or line.startswith(('#', ';')):
+                    continue
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    k = k.strip().lower()
+                    v = v.strip()
+                    if k == 'type':
+                        query_type = v.lower()
+                        if query_type not in ('select', 'exec'):
+                            errors.append("元数据 [meta] 中的 type='{}' 无效，仅支持 select 或 exec".format(v))
+                    elif k == 'title':
+                        meta_title = v
+                    elif k == 'web_enabled':
+                        if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no', '是', '否'):
+                            warnings.append("元数据 web_enabled='{}' 不是标准布尔值（建议使用 true 或 false）".format(v))
+
+            if not meta_title:
+                warnings.append("元数据 [meta] 未配置 title，系统将默认使用文件名作为表单标题")
+
+        # 3. 校验 [params]
+        defined_params = set()
+        if params_section:
+            for line_no, line in enumerate(params_section.splitlines(), 1):
+                token = line.strip()
+                if not token or token.startswith(('#', ';')):
+                    continue
+                if '=' not in token:
+                    errors.append("[params] 第 {} 行格式错误：缺少等号 '='（标准格式：参数名 = 显示标签 | 类型 | 默认值 | 属性...）".format(line_no))
+                    continue
+                raw_name, rest = token.split('=', 1)
+                p_name = raw_name.strip()
+                if not p_name:
+                    errors.append("[params] 第 {} 行参数名为空".format(line_no))
+                    continue
+                if not re.match(r'^[a-zA-Z_]\w*$', p_name):
+                    errors.append("[params] 第 {} 行参数名「{}」不合法，必须以字母或下划线开头，仅包含字母、数字和下划线".format(line_no, p_name))
+                    continue
+                if p_name in defined_params:
+                    errors.append("[params] 第 {} 行参数名「{}」重复定义".format(line_no, p_name))
+                defined_params.add(p_name)
+
+                parts = [p.strip() for p in rest.split('|')]
+                raw_type = parts[1] if len(parts) >= 2 else 'text'
+                ptype, static_opts = FormParser._parse_type(raw_type)
+
+                valid_base_types = ('text', 'date', 'datetime', 'number', 'textarea', 'checkbox', 'hidden', 'select', 'radio')
+                clean_type = raw_type.split(':', 1)[0].strip().lower()
+                if clean_type not in valid_base_types:
+                    warnings.append("[params] 参数「{}」的类型「{}」非系统内置控件类型，将默认按单行文本框显示".format(p_name, raw_type))
+
+                attrs = parts[2:] if len(parts) > 2 else []
+                (default_val, placeholder, required, width, options_sql,
+                 searchable, allow_custom) = FormParser._parse_param_attributes(attrs)
+
+                if options_sql:
+                    ok, reason = validate_options_sql(options_sql)
+                    if not ok:
+                        errors.append("[params] 参数「{}」的 options_sql 检查失败：{}".format(p_name, reason))
+
+                if clean_type in ('select', 'radio') and not static_opts and not options_sql:
+                    warnings.append("[params] 参数「{}」为 {} 类型，但既未配置静态候选项，也未配置 options_sql 动态候选项".format(p_name, clean_type))
+
+        # 4. 校验 [sql]
+        sql = sql_section.strip()
+        if sql:
+            ok, reason = FormParser.is_safe_sql(sql, query_type)
+            if not ok:
+                errors.append("SQL 安全检查未通过：{}".format(reason))
+
+            # 占位符匹配检查
+            placeholders = sql_placeholders(sql)
+            for p in placeholders:
+                if p.lower() in ('today', 'now'):
+                    continue
+                if p not in defined_params:
+                    errors.append("SQL 中引用了未在 [params] 中定义的参数：{{{}}}".format(p))
+
+            for p in defined_params:
+                if p not in placeholders:
+                    warnings.append("参数「{}」已在 [params] 中定义，但未在 SQL 脚本中被引用".format(p))
+
+            # 单引号匹配启发式检查（过滤注释）
+            no_comment_sql = re.sub(r'--[^\n]*', '', sql)
+            no_comment_sql = re.sub(r'/\*.*?\*/', '', no_comment_sql, flags=re.DOTALL)
+            clean_quotes = no_comment_sql.replace("''", "")
+            if clean_quotes.count("'") % 2 != 0:
+                warnings.append("SQL 脚本中的单引号数量不成对，可能存在未闭合的字符串常量")
+
+            # 圆括号匹配启发式检查
+            left_p = no_comment_sql.count('(')
+            right_p = no_comment_sql.count(')')
+            if left_p != right_p:
+                warnings.append("SQL 脚本中的圆括号数量不匹配（左括号 {} 个，右括号 {} 个）".format(left_p, right_p))
+
+        is_valid = (len(errors) == 0)
+        return is_valid, errors, warnings
+
+    def _on_validate_clicked(self):
+        """单独执行表单校验并弹窗展示结果"""
+        is_valid, errors, warnings = self.validate_form()
+        if errors:
+            msg = "表单校验未通过，发现以下错误：\n\n"
+            msg += "\n".join("❌ " + e for e in errors)
+            if warnings:
+                msg += "\n\n另外发现以下建议项：\n\n"
+                msg += "\n".join("⚠️ " + w for w in warnings)
+            QMessageBox.critical(self, "表单校验未通过", msg)
+        elif warnings:
+            msg = "表单基本校验通过，但发现以下建议项：\n\n"
+            msg += "\n".join("⚠️ " + w for w in warnings)
+            QMessageBox.warning(self, "表单校验提醒", msg)
+        else:
+            QMessageBox.information(
+                self, "表单校验通过",
+                "✅ 校验通过！\n\n表单元数据配置、参数定义与 SQL 脚本结构完整无误。"
+            )
+
     def _get_save_path(self):
         """获取保存路径；返回 None 表示用户取消或输入无效"""
+        # 目标分组优先取下拉框输入值，同时兼顾用户直接在编辑器中手动修改的 group
+        target_group = self.group_combo.currentText().strip() or '默认'
+        content = self.editor.toPlainText()
+        meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content, re.DOTALL | re.IGNORECASE)
+        if meta_m:
+            for line in meta_m.group(1).splitlines():
+                line = line.strip()
+                if line.startswith(('#', ';')):
+                    continue
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    if k.strip().lower() == 'group' and v.strip():
+                        target_group = v.strip()
+                        break
+
+        target_group = re.sub(r'[\\/:*?"<>|]', '_', target_group)
+
         if self.form:
-            # 如果是编辑已有表单，检查 [meta] 中的 group 是否被修改
-            content = self.editor.toPlainText()
-            meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content,
-                               re.DOTALL | re.IGNORECASE)
-            target_group = self.form.group or '默认'
-            if meta_m:
-                for line in meta_m.group(1).splitlines():
-                    line = line.strip()
-                    if line.startswith(('#', ';')):
-                        continue
-                    if '=' in line:
-                        k, v = line.split('=', 1)
-                        if k.strip().lower() == 'group' and v.strip():
-                            target_group = v.strip()
-                            break
-            
-            target_group = re.sub(r'[\\/:*?"<>|]', '_', target_group)
-            current_dir_name = os.path.basename(os.path.dirname(self.form.file_path))
-            if current_dir_name.lower() != 'forms' and target_group != current_dir_name:
-                # 分组被修改，需要移动到新分组目录
-                new_dir = os.path.join(self.forms_dir, target_group)
-                os.makedirs(new_dir, exist_ok=True)
-                return os.path.join(new_dir, os.path.basename(self.form.file_path))
+            current_dir = os.path.dirname(os.path.abspath(self.form.file_path))
+            target_dir = os.path.abspath(os.path.join(self.forms_dir, target_group))
+            if current_dir != target_dir:
+                # 分组发生变更，移动到新分组目录
+                os.makedirs(target_dir, exist_ok=True)
+                new_path = os.path.join(target_dir, os.path.basename(self.form.file_path))
+                if os.path.exists(new_path) and os.path.abspath(new_path) != os.path.abspath(self.form.file_path):
+                    reply = QMessageBox.question(
+                        self, "确认覆盖",
+                        "目标分组下已存在同名表单文件，是否覆盖？\n\n{}".format(new_path),
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply != QMessageBox.Yes:
+                        return None
+                return new_path
             return self.form.file_path
 
-        group = self.group_combo.currentText().strip() or '默认'
-        name  = self.filename_edit.text().strip()
-
+        name = self.filename_edit.text().strip()
         if not name:
             QMessageBox.warning(self, "提示", "请输入文件名")
             return None
 
         # 清理非法字符
-        name  = re.sub(r'[\\/:*?"<>|]', '_', name)
-        group = re.sub(r'[\\/:*?"<>|]', '_', group)
-
-        group_dir = os.path.join(self.forms_dir, group)
+        name = re.sub(r'[\\/:*?"<>|]', '_', name)
+        group_dir = os.path.join(self.forms_dir, target_group)
         os.makedirs(group_dir, exist_ok=True)
 
         path = os.path.join(group_dir, name + '.qry')
@@ -345,7 +547,7 @@ class FormEditorDialog(QDialog):
         # 根据实际保存路径的目录推断并规范化 group
         folder_group = os.path.basename(os.path.dirname(path))
         if folder_group.lower() == 'forms':
-            folder_group = (self.group_combo.currentText().strip() if not self.form else '默认') or '默认'
+            folder_group = self.group_combo.currentText().strip() or '默认'
 
         raw_content = self.editor.toPlainText()
         content = self._apply_group(raw_content, folder_group)
@@ -408,9 +610,10 @@ class FormEditorDialog(QDialog):
 
             # 如果已有表单保存到了新路径（如修改了分组），移除旧位置文件
             if self.form and self.form.file_path and os.path.abspath(path) != os.path.abspath(self.form.file_path):
+                old_path = self.form.file_path
                 try:
-                    if os.path.exists(self.form.file_path):
-                        os.remove(self.form.file_path)
+                    if os.path.exists(old_path):
+                        os.remove(old_path)
                 except Exception:
                     pass
                 self.form.file_path = path
@@ -422,6 +625,25 @@ class FormEditorDialog(QDialog):
             return False
 
     def _save(self):
+        if self.validate_on_save_check.isChecked():
+            is_valid, errors, warnings = self.validate_form()
+            if errors:
+                msg = "表单存在以下错误，无法保存：\n\n"
+                msg += "\n".join("❌ " + e for e in errors)
+                msg += "\n\n请修正错误后再保存，或取消勾选「保存退出时校验」。"
+                QMessageBox.critical(self, "保存受阻 - 表单校验未通过", msg)
+                return
+            if warnings:
+                msg = "表单发现以下建议项：\n\n"
+                msg += "\n".join("⚠️ " + w for w in warnings)
+                msg += "\n\n是否仍然确认保存？"
+                reply = QMessageBox.warning(
+                    self, "保存确认 - 存在校验警告", msg,
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
         path = self._get_save_path()
         if path is None:
             return
@@ -431,6 +653,25 @@ class FormEditorDialog(QDialog):
             self.accept()
 
     def _save_as(self):
+        if self.validate_on_save_check.isChecked():
+            is_valid, errors, warnings = self.validate_form()
+            if errors:
+                msg = "表单存在以下错误，无法另存为：\n\n"
+                msg += "\n".join("❌ " + e for e in errors)
+                msg += "\n\n请修正错误后再另存为，或取消勾选「保存退出时校验」。"
+                QMessageBox.critical(self, "另存为受阻 - 表单校验未通过", msg)
+                return
+            if warnings:
+                msg = "表单发现以下建议项：\n\n"
+                msg += "\n".join("⚠️ " + w for w in warnings)
+                msg += "\n\n是否仍然确认另存为？"
+                reply = QMessageBox.warning(
+                    self, "另存为确认 - 存在校验警告", msg,
+                    QMessageBox.Yes | QMessageBox.No
+                )
+                if reply != QMessageBox.Yes:
+                    return
+
         default_dir = os.path.join(self.forms_dir, self.form.group or '默认') if self.form else self.forms_dir
         default = os.path.join(
             default_dir,

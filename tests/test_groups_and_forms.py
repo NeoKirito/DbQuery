@@ -215,6 +215,145 @@ class GroupAndFormLoadingTests(unittest.TestCase):
         self.assertIn('刷新表单', button_texts)
 
 
+    def test_form_editor_group_dropdown_in_edit_mode(self):
+        """测试在编辑已有表单时，所属分组下拉框正常显示并支持下拉选择与同步"""
+        os.makedirs(os.path.join(self.forms_dir, '科室A'), exist_ok=True)
+        os.makedirs(os.path.join(self.forms_dir, '科室B'), exist_ok=True)
+        form_path = os.path.join(self.forms_dir, '科室A', '检查单.qry')
+        with open(form_path, 'w', encoding='utf-8') as f:
+            f.write("[meta]\ntitle = 检查单\ngroup = 科室A\n[params]\n[sql]\nSELECT 1\n")
+
+        form = FormParser.parse_file(form_path, forms_root=self.forms_dir)
+        dlg = FormEditorDialog(form, self.forms_dir)
+
+        # 检查 group_combo 存在且当前值为 科室A
+        self.assertIsNotNone(getattr(dlg, 'group_combo', None))
+        self.assertEqual(dlg.group_combo.currentText(), '科室A')
+
+        # 下拉框中包含了所有已有分组
+        items = [dlg.group_combo.itemText(i) for i in range(dlg.group_combo.count())]
+        self.assertIn('科室A', items)
+        self.assertIn('科室B', items)
+
+        # 在下拉框切换到 科室B，验证代码自动同步
+        idx = dlg.group_combo.findText('科室B')
+        self.assertGreaterEqual(idx, 0)
+        dlg.group_combo.setCurrentIndex(idx)
+        self.assertIn('group = 科室B', dlg.editor.toPlainText())
+
+        # 保存并验证移动
+        save_path = dlg._get_save_path()
+        self.assertTrue(save_path.endswith(os.path.join('科室B', '检查单.qry')))
+        ok = dlg._do_save(save_path)
+        self.assertTrue(ok)
+        self.assertTrue(os.path.exists(save_path))
+        self.assertFalse(os.path.exists(form_path))
+
+    def test_form_editor_validation_engine(self):
+        """测试 FormEditorDialog 的多维度校验引擎"""
+        dlg = FormEditorDialog(None, self.forms_dir)
+
+        # 1. 合法表单校验
+        valid_content = (
+            "[meta]\n"
+            "title = 体检查询\n"
+            "group = 默认\n"
+            "type = select\n\n"
+            "[params]\n"
+            "start_date = 开始日期 | date | {today} | required\n"
+            "status = 状态 | select:全部,启用,禁用 | 全部 | searchable\n\n"
+            "[sql]\n"
+            "SELECT * FROM Users WHERE RegDate >= '{start_date}' AND Status = '{status}'\n"
+        )
+        is_valid, errors, warnings = dlg.validate_form(valid_content)
+        self.assertTrue(is_valid)
+        self.assertEqual(errors, [])
+
+        # 2. 空内容校验
+        is_valid, errors, warnings = dlg.validate_form("")
+        self.assertFalse(is_valid)
+        self.assertTrue(any('为空' in e for e in errors))
+
+        # 3. 未知查询类型
+        bad_type_content = valid_content.replace('type = select', 'type = insert_mode')
+        is_valid, errors, warnings = dlg.validate_form(bad_type_content)
+        self.assertFalse(is_valid)
+        self.assertTrue(any('无效' in e or '仅支持' in e for e in errors))
+
+        # 4. 参数格式错误（缺少等号）
+        bad_param_content = valid_content.replace(
+            "start_date = 开始日期 | date | {today} | required",
+            "start_date 开始日期 | date"
+        )
+        is_valid, errors, warnings = dlg.validate_form(bad_param_content)
+        self.assertFalse(is_valid)
+        self.assertTrue(any('等号' in e for e in errors))
+
+        # 5. 参数名重复
+        dup_param_content = valid_content.replace(
+            "status = 状态",
+            "start_date = 状态"
+        )
+        is_valid, errors, warnings = dlg.validate_form(dup_param_content)
+        self.assertFalse(is_valid)
+        self.assertTrue(any('重复定义' in e for e in errors))
+
+        # 6. options_sql 不安全检测
+        unsafe_opt_content = (
+            "[meta]\ntitle = 测试\n[params]\n"
+            "dept = 科室 | select | | options_sql=DELETE FROM Dept\n"
+            "[sql]\nSELECT * FROM Users\n"
+        )
+        is_valid, errors, warnings = dlg.validate_form(unsafe_opt_content)
+        self.assertFalse(is_valid)
+        self.assertTrue(any('options_sql' in e for e in errors))
+
+        # 7. SQL 包含危险关键字
+        danger_sql_content = (
+            "[meta]\ntitle = 测试\n[params]\n"
+            "[sql]\nDROP TABLE ImportantData\n"
+        )
+        is_valid, errors, warnings = dlg.validate_form(danger_sql_content)
+        self.assertFalse(is_valid)
+        self.assertTrue(any('安全检查未通过' in e for e in errors))
+
+        # 8. SQL 引用了未定义的参数占位符
+        missing_placeholder_content = (
+            "[meta]\ntitle = 测试\n[params]\n"
+            "start_date = 开始日期 | date\n"
+            "[sql]\nSELECT * FROM Users WHERE Age = {user_age}\n"
+        )
+        is_valid, errors, warnings = dlg.validate_form(missing_placeholder_content)
+        self.assertFalse(is_valid)
+        self.assertTrue(any('user_age' in e for e in errors))
+
+        # 9. 括号不匹配产生警告
+        unbalanced_paren_content = (
+            "[meta]\ntitle = 测试\n[params]\n"
+            "start_date = 开始日期 | date\n"
+            "[sql]\nSELECT * FROM Users WHERE (CreateDate >= '{start_date}'\n"
+        )
+        is_valid, errors, warnings = dlg.validate_form(unbalanced_paren_content)
+        self.assertTrue(is_valid)  # 警告不阻断有效性
+        self.assertTrue(any('括号' in w for w in warnings))
+
+    def test_form_editor_validation_ui_components(self):
+        """测试 FormEditorDialog 校验 UI 控件状态与保存退出勾选交互"""
+        from unittest.mock import patch
+        dlg = FormEditorDialog(None, self.forms_dir)
+
+        # 校验控件存在性与默认状态
+        self.assertIsNotNone(getattr(dlg, 'validate_btn', None))
+        self.assertIsNotNone(getattr(dlg, 'validate_on_save_check', None))
+        self.assertTrue(dlg.validate_on_save_check.isChecked())
+
+        # 当勾选保存退出校验且表单有错误时，保存被拦截
+        dlg.editor.setPlainText("[meta]\ntitle = 错误表单\n[sql]\nDROP TABLE Test\n")
+        with patch('PyQt5.QtWidgets.QMessageBox.critical') as mock_critical:
+            dlg._save()
+            self.assertTrue(mock_critical.called)
+
+
 if __name__ == '__main__':
     unittest.main()
 
