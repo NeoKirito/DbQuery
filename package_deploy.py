@@ -357,14 +357,23 @@ def clean_root_obsolete_files(target_dir):
     清理根目录下遗留的旧版二进制、DLL 及运行库目录，确保根目录结构纯净。
     根目录白名单：
       - 目录：dist, forms
-      - 文件：config.ini, app.ico, app.png, *.bat, *.md, *.docx, *.js, *.lnk
+      - 文件：config.ini, app.ico, app.png, dbquery-embed.js, *.md, 施工文档, *.bat
     """
     if not os.path.exists(target_dir):
         return
 
     allowed_dirs = {'dist', 'forms'}
-    allowed_file_exts = {'.bat', '.md', '.docx', '.ico', '.png', '.lnk', '.js'}
-    allowed_file_names = {'config.ini'}
+    exact_allowed_files = {
+        'config.ini', 'app.ico', 'app.png', 'dbquery-embed.js',
+        'readme.md', 'frontend_integration.md', 'host_integration.md',
+        '体检系统-dbquery综合查询与报表部署配置施工文档.docx',
+        '体检升级-施工升级文档.docx',
+        '启动dbquery桌面版.bat', 'start_desktop.bat',
+        '启动dbqueryweb服务.bat', 'start_web.bat',
+        '停止dbqueryweb服务.bat', 'stop_web.bat',
+        '重启dbqueryweb服务.bat', 'restart_web.bat',
+        '创建桌面快捷方式.bat', '刷新windows图标缓存.bat'
+    }
 
     for item in list(os.listdir(target_dir)):
         item_path = os.path.join(target_dir, item)
@@ -373,10 +382,8 @@ def clean_root_obsolete_files(target_dir):
                 print(f"    Cleaning obsolete directory: {item}")
                 shutil.rmtree(item_path, ignore_errors=True)
         else:
-            ext = os.path.splitext(item)[1].lower()
-            name = item.lower()
-            if ext not in allowed_file_exts and name not in allowed_file_names:
-                print(f"    Cleaning obsolete file: {item}")
+            if item.lower() not in exact_allowed_files:
+                print(f"    Cleaning non-whitelisted/obsolete file: {item}")
                 try:
                     os.remove(item_path)
                 except Exception as e:
