@@ -714,10 +714,19 @@ $(document).ready(function () {
     loadFormTree();
     initializeProjectSwitcher();
 
-    $(document).on('keydown', '.param-input', function (event) {
-        if (event.key === 'Enter' && !$(this).is('textarea')) {
+    $(document).on('keydown', '.conditions-section input:not(textarea), .param-field input:not(textarea), .searchable-select-input, .param-input:not(textarea)', function (event) {
+        if (event.key === 'Enter' || event.keyCode === 13) {
+            var $select = $(this).closest('.searchable-select');
+            if ($select.length) {
+                var $menu = $select.find('.searchable-select-menu');
+                if ($menu.length && !$menu.prop('hidden')) {
+                    return;
+                }
+            }
             event.preventDefault();
-            executeQuery();
+            var $pane = $(this).closest('.tab-pane');
+            var tabId = $pane.length ? $pane.data('tab-id') : null;
+            executeQuery(tabId);
         }
     });
 });
@@ -854,16 +863,23 @@ function initializeSearchableSelects($context) {
         });
         $input.on('keydown', function (event) {
             var $options;
-            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            var isEnter = event.key === 'Enter' || event.keyCode === 13;
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.keyCode === 40 || event.keyCode === 38) {
                 event.preventDefault();
                 openMenu();
                 $options = visibleOptions();
-                if ($options.length) setActive(activeIndex + (event.key === 'ArrowDown' ? 1 : -1));
-            } else if (event.key === 'Enter') {
-                event.preventDefault();
-                $options = visibleOptions();
-                if ($options.length) selectOption($options.eq(activeIndex >= 0 ? activeIndex : 0));
-            } else if (event.key === 'Escape') {
+                if ($options.length) setActive(activeIndex + ((event.key === 'ArrowDown' || event.keyCode === 40) ? 1 : -1));
+            } else if (isEnter) {
+                if (!$menu.prop('hidden')) {
+                    event.preventDefault();
+                    $options = visibleOptions();
+                    if ($options.length) {
+                        selectOption($options.eq(activeIndex >= 0 ? activeIndex : 0));
+                    } else {
+                        closeMenu();
+                    }
+                }
+            } else if (event.key === 'Escape' || event.keyCode === 27) {
                 event.preventDefault();
                 closeMenu();
             }

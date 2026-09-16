@@ -235,6 +235,8 @@ SELECT 1 AS Result
             js = f.read()
         self.assertIn('conditions-actions', js)
         self.assertIn('result-dt-tools', js)
+        self.assertIn('.conditions-section input:not(textarea)', js)
+        self.assertIn('event.keyCode === 13', js)
 
 
 if __name__ == '__main__':
