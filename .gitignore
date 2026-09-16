@@ -8,5 +8,14 @@ build/
 dist/
 dist_final/
 
+# .NET build output & IDE
+bin/
+obj/
+*.user
+*.suo
+.vs/
+.vscode/
+
 # Runtime logs
 *.log
+

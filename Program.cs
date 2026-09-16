@@ -32,11 +32,11 @@ builder.Services.AddSingleton<IConfigManagerService, ConfigManagerService>();
 
 var app = builder.Build();
 
-// 静态文件目录映射到根目录下的 static/
-var staticDir = Path.Combine(builder.Environment.ContentRootPath, "..", "static");
+// 静态文件目录映射
+var staticDir = Path.Combine(builder.Environment.ContentRootPath, "static");
 if (!Directory.Exists(staticDir))
 {
-    staticDir = Path.Combine(builder.Environment.ContentRootPath, "static");
+    staticDir = Path.Combine(builder.Environment.ContentRootPath, "..", "static");
 }
 
 if (Directory.Exists(staticDir))
