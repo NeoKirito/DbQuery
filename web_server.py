@@ -341,10 +341,10 @@ def _extract_request_origin(req=None):
 
 def _is_allowed_origin(origin, allowed_origins, allow_all=False, req=None):
     """判断给定的 Origin 是否在允许列表中，支持通配符、同机不同端口及同源访问。"""
-    if not origin:
-        return False
     if allow_all or '*' in (allowed_origins or []):
         return True
+    if not origin:
+        return False
 
     origin_norm = origin.strip().lower().rstrip('/')
     normalized_allowed = [o.strip().lower().rstrip('/') for o in (allowed_origins or []) if o]
@@ -404,7 +404,7 @@ def _frontend_integration_config():
 def _frontend_cors_response(response, origin):
     """仅向精确匹配的可信 Origin 开放前端票据接口。"""
     response = make_response(response)
-    response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Origin'] = origin or '*'
     response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
     response.headers['Access-Control-Allow-Headers'] = (
         'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-DBQuery-Embed-Token'
@@ -438,8 +438,10 @@ def _frontend_embed_config():
 def _frontend_embed_cors_response(response, origin, methods='POST, OPTIONS'):
     """仅为精确匹配的 Embed Origin 开放携带 DBQuery 会话的 CORS 请求。"""
     response = make_response(response)
-    response.headers['Access-Control-Allow-Origin'] = origin
-    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    effective_origin = origin or '*'
+    response.headers['Access-Control-Allow-Origin'] = effective_origin
+    if effective_origin != '*':
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
     response.headers['Access-Control-Allow-Methods'] = methods
     response.headers['Access-Control-Allow-Headers'] = (
         'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-DBQuery-Embed-Token'

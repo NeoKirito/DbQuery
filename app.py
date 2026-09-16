@@ -61,13 +61,22 @@ def main():
         return
 
     if '--web' in args:
-        port = 8094
+        port = 6091
+        try:
+            from core.paths import get_config_path
+            import configparser
+            cp = configparser.ConfigParser()
+            cp.read(get_config_path(), encoding='utf-8')
+            if cp.has_option('web', 'port'):
+                port = cp.getint('web', 'port')
+        except Exception:
+            port = 6091
         if '--port' in args:
             try:
                 idx = args.index('--port')
                 port = int(args[idx + 1])
             except (IndexError, ValueError):
-                print("错误：--port 后需要跟端口号，如 --port 8080")
+                print("错误：--port 后需要跟端口号，如 --port 6091")
                 return
         run_web(port)
     else:
