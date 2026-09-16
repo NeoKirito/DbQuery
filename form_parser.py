@@ -337,7 +337,10 @@ class FormParser:
         """只在 forms 不存在时从随包 defaults/forms 初始化，绝不覆盖现场表单。"""
         if os.path.exists(forms_dir):
             return
-        defaults_dir = os.path.join(os.path.dirname(forms_dir), 'defaults', 'forms')
+        from core.paths import get_resource_dir
+        defaults_dir = os.path.join(get_resource_dir(), 'defaults', 'forms')
+        if not os.path.isdir(defaults_dir):
+            defaults_dir = os.path.join(os.path.dirname(forms_dir), 'defaults', 'forms')
         if os.path.isdir(defaults_dir):
             shutil.copytree(defaults_dir, forms_dir)
         else:

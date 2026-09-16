@@ -15,12 +15,10 @@ import pyodbc
 
 logger = logging.getLogger('DBQuery.db_manager')
 
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from core.paths import get_app_dir, get_config_path
 
-CONFIG_PATH = os.path.join(BASE_DIR, 'config.ini')
+BASE_DIR = get_app_dir()
+CONFIG_PATH = get_config_path()
 
 DEFAULT_DB_CONFIG = {
     'server': 'localhost',

@@ -7,8 +7,14 @@ import os
 import logging
 import traceback
 
+from core.paths import get_app_dir, get_exe_dir, get_forms_dir
+
+BASE_DIR = get_app_dir()
+EXE_DIR = get_exe_dir()
+FORMS_DIR = get_forms_dir()
+
 # 配置日志
-log_file = os.path.join(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__)), 'dbquery.log')
+log_file = os.path.join(BASE_DIR, 'dbquery.log')
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -34,14 +40,6 @@ from widgets.query_tab import QueryTab
 from widgets.config_dialog import ConfigDialog
 from widgets.form_editor import FormEditorDialog
 from widgets.login_dialog import require_desktop_login
-
-# ── 路径常量（exe 和开发模式均有效）──
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-FORMS_DIR = os.path.join(BASE_DIR, 'forms')
 
 # 连接状态常量
 STATUS_UNKNOWN  = 0
@@ -82,7 +80,11 @@ class MainWindow(QMainWindow):
 
         app_icon_path = os.path.join(BASE_DIR, 'app.ico')
         if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
             app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.png')
         if os.path.exists(app_icon_path):
             self.setWindowIcon(QIcon(app_icon_path))
 
@@ -752,7 +754,11 @@ def main():
         QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)
         app_icon_path = os.path.join(BASE_DIR, 'app.ico')
         if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
             app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.png')
         if os.path.exists(app_icon_path):
             app.setWindowIcon(QIcon(app_icon_path))
         logger.info("QApplication created")

@@ -11,10 +11,10 @@ from PyQt5.QtWidgets import (
 from db_manager import DBManager
 from widgets.config_dialog import ConfigDialog
 
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from core.paths import get_app_dir, get_exe_dir
+
+BASE_DIR = get_app_dir()
+EXE_DIR = get_exe_dir()
 
 
 class LoginDialog(QDialog):
@@ -30,7 +30,11 @@ class LoginDialog(QDialog):
 
         app_icon_path = os.path.join(BASE_DIR, 'app.ico')
         if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
             app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.png')
         if os.path.exists(app_icon_path):
             self.setWindowIcon(QIcon(app_icon_path))
 
@@ -44,7 +48,11 @@ class LoginDialog(QDialog):
         # ── Logo 图标（圆形无背景）──
         logo_path = os.path.join(BASE_DIR, 'app.png')
         if not os.path.exists(logo_path):
+            logo_path = os.path.join(EXE_DIR, 'app.png')
+        if not os.path.exists(logo_path):
             logo_path = os.path.join(BASE_DIR, 'static', 'logo.png')
+        if not os.path.exists(logo_path):
+            logo_path = os.path.join(EXE_DIR, 'static', 'logo.png')
         if os.path.exists(logo_path):
             logo_lbl = QLabel()
             pix = QPixmap(logo_path).scaled(64, 64, Qt.KeepAspectRatio, Qt.SmoothTransformation)

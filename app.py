@@ -9,12 +9,13 @@ import sys
 import os
 
 # ── 路径设置 ──
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from core.paths import get_app_dir, get_exe_dir
+
+BASE_DIR = get_app_dir()
+EXE_DIR = get_exe_dir()
 
 os.chdir(BASE_DIR)
+sys.path.insert(0, EXE_DIR)
 sys.path.insert(0, BASE_DIR)
 
 try:

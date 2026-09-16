@@ -111,6 +111,7 @@ a = Analysis(
         'itsdangerous',
         'click',
         'core',
+        'core.paths',
         'core.query_service',
         'web_server',
         'main',

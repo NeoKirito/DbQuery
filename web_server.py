@@ -23,13 +23,15 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from flask.json.provider import DefaultJSONProvider
 
-if getattr(sys, 'frozen', False):
-    # PyInstaller 5 的 onedir 与 PyInstaller 6 的 _internal 布局均可解析。
-    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from core.paths import get_app_dir, get_exe_dir, get_forms_dir, get_resource_dir
 
-sys.path.insert(0, BASE_DIR)
+APP_DIR = get_app_dir()
+EXE_DIR = get_exe_dir()
+RES_DIR = get_resource_dir()
+BASE_DIR = APP_DIR
+
+sys.path.insert(0, EXE_DIR)
+sys.path.insert(0, APP_DIR)
 
 from db_manager import DBManager, QueryTimeoutError
 from form_parser import FormParser
@@ -45,7 +47,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('DBQuery.web')
 
-FORMS_DIR = os.path.join(BASE_DIR, 'forms')
+FORMS_DIR = get_forms_dir()
 
 
 class DBQueryJSONProvider(DefaultJSONProvider):
@@ -73,8 +75,8 @@ def _session_same_site():
 
 app = Flask(
     __name__,
-    template_folder=os.path.join(BASE_DIR, 'templates'),
-    static_folder=os.path.join(BASE_DIR, 'static')
+    template_folder=os.path.join(RES_DIR, 'templates'),
+    static_folder=os.path.join(RES_DIR, 'static')
 )
 app.json_provider_class = DBQueryJSONProvider
 app.json = DBQueryJSONProvider(app)
