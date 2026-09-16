@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}登录综合查询{% endblock %}
+{% block title %}DBQuery{% endblock %}
 
 {% block head %}
 <style>
@@ -37,7 +37,7 @@
         <label class="login-label" for="password">密码</label>
         <input class="login-input" id="password" name="password" type="password" maxlength="128" required autocomplete="current-password" placeholder="密码">
         {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
-        <button class="login-submit" type="submit">登录并查看查询项目</button>
+        <button class="login-submit" type="submit">登录</button>
         <p class="login-note">未登录时不能查看表单、候选项、查询结果或导出数据。若当前程序尚未配置数据库，请先在 EXE 登录窗口中完成数据库连接配置。</p>
     </form>
 </section>

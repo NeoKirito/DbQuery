@@ -86,9 +86,52 @@ class LoginDialog(QDialog):
         actions.addStretch()
         cancel_btn = QPushButton(u'退出')
         cancel_btn.clicked.connect(self.reject)
+        cancel_btn.setStyleSheet(u"""
+            QPushButton {
+                background-color: #FFFFFF;
+                color: #4A5568;
+                border: 1px solid #CBD5E1;
+                border-radius: 4px;
+                padding: 5px 14px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #F1F5F9;
+                border-color: #94A3B8;
+                color: #1E293B;
+            }
+            QPushButton:pressed {
+                background-color: #E2E8F0;
+            }
+        """)
+
         login_btn = QPushButton(u'登录')
         login_btn.setDefault(True)
         login_btn.clicked.connect(self._attempt_login)
+        login_btn.setStyleSheet(u"""
+            QPushButton {
+                background-color: #1A6EB5;
+                color: #FFFFFF;
+                border: 1px solid #145E9C;
+                border-radius: 4px;
+                padding: 5px 20px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #145B96;
+                border-color: #104A7B;
+            }
+            QPushButton:pressed {
+                background-color: #0F4572;
+                border-color: #0C365A;
+            }
+            QPushButton:disabled {
+                background-color: #96BCE0;
+                border-color: #96BCE0;
+                color: #EBF3FA;
+            }
+        """)
         actions.addWidget(cancel_btn)
         actions.addWidget(login_btn)
         layout.addLayout(actions)
