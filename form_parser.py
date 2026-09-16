@@ -226,8 +226,17 @@ class FormParser:
         form = QueryForm()
         form.file_path = file_path
 
-        with open(file_path, 'r', encoding='utf-8-sig') as form_file:
-            content = form_file.read()
+        content = None
+        for enc in ('utf-8-sig', 'gb18030', 'utf-8', 'latin1'):
+            try:
+                with open(file_path, 'r', encoding=enc) as form_file:
+                    content = form_file.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        if content is None:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as form_file:
+                content = form_file.read()
 
         meta_group = ''
         for line in FormParser._get_section(content, 'meta').splitlines():

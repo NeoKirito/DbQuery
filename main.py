@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QMessageBox, QLineEdit,
     QFrame, QSizePolicy, QAction, QTabBar, QInputDialog
 )
-from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QFileSystemWatcher, QEvent
 from PyQt5.QtGui import QFont, QIcon, QColor
 
 from db_manager import DBManager
@@ -86,6 +86,15 @@ class MainWindow(QMainWindow):
         if os.path.exists(app_icon_path):
             self.setWindowIcon(QIcon(app_icon_path))
 
+        # ── 目录变更实时感知与文件监听器 ──
+        self._fs_watcher = QFileSystemWatcher(self)
+        self._fs_debounce_timer = QTimer(self)
+        self._fs_debounce_timer.setSingleShot(True)
+        self._fs_debounce_timer.setInterval(300)
+        self._fs_debounce_timer.timeout.connect(self._on_fs_changed_timeout)
+        self._fs_watcher.directoryChanged.connect(self._schedule_fs_reload)
+        self._fs_watcher.fileChanged.connect(self._schedule_fs_reload)
+
         self._setup_ui()
         self._load_forms()
 
@@ -130,14 +139,11 @@ class MainWindow(QMainWindow):
 
         tb.addSeparator()
 
-        btn_new       = QPushButton(u"新建表单")
-        btn_new_group = QPushButton(u"新建分组")
-        btn_refresh   = QPushButton(u"刷新表单")
+        btn_new     = QPushButton(u"新建表单")
+        btn_refresh = QPushButton(u"刷新表单")
         btn_new.clicked.connect(lambda: self._new_form())
-        btn_new_group.clicked.connect(self._new_group)
         btn_refresh.clicked.connect(self._load_forms)
         tb.addWidget(btn_new)
-        tb.addWidget(btn_new_group)
         tb.addWidget(btn_refresh)
 
         # 右侧弹簧
@@ -279,9 +285,44 @@ class MainWindow(QMainWindow):
     def _load_forms(self):
         self.forms_data = FormParser.load_forms_from_dir(FORMS_DIR)
         self._rebuild_tree(self.forms_data)
+        self._update_watched_paths()
         total_forms = sum(len(v) for v in self.forms_data.values())
         total_groups = len(self.forms_data)
         self.statusBar().showMessage(u"已加载 {} 个分组，共 {} 个表单".format(total_groups, total_forms))
+
+    def _update_watched_paths(self):
+        """确保 forms 根目录及其直接子目录都在监听列表中"""
+        if not hasattr(self, '_fs_watcher'):
+            return
+        if not os.path.isdir(FORMS_DIR):
+            return
+        needed = [os.path.abspath(FORMS_DIR)]
+        try:
+            for name in os.listdir(FORMS_DIR):
+                p = os.path.join(FORMS_DIR, name)
+                if os.path.isdir(p) and not name.startswith(('.', '_')):
+                    needed.append(os.path.abspath(p))
+        except Exception:
+            pass
+
+        current = set(os.path.abspath(p) for p in self._fs_watcher.directories())
+        for p in needed:
+            if p not in current and os.path.exists(p):
+                self._fs_watcher.addPath(p)
+
+    def _schedule_fs_reload(self, path=None):
+        """文件系统发生变更时防抖触发重新加载"""
+        if hasattr(self, '_fs_debounce_timer'):
+            self._fs_debounce_timer.start()
+
+    def _on_fs_changed_timeout(self):
+        self._load_forms()
+
+    def changeEvent(self, event):
+        """当主窗口重新获取焦点时（如从资源管理器粘贴文件夹后切回），自动轻量同步"""
+        if event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            self._schedule_fs_reload()
+        super(MainWindow, self).changeEvent(event)
 
     def _rebuild_tree(self, data, filter_text=''):
         self.form_tree.clear()
@@ -344,15 +385,12 @@ class MainWindow(QMainWindow):
 
         if not item:
             # 在空白区域点击
-            a_new_grp  = menu.addAction(u"新建分组")
             a_new_form = menu.addAction(u"新建表单")
             menu.addSeparator()
             a_refresh  = menu.addAction(u"刷新表单列表")
 
             act = menu.exec_(self.form_tree.viewport().mapToGlobal(pos))
-            if act == a_new_grp:
-                self._new_group()
-            elif act == a_new_form:
+            if act == a_new_form:
                 self._new_form()
             elif act == a_refresh:
                 self._load_forms()
@@ -366,7 +404,6 @@ class MainWindow(QMainWindow):
             grp = group_name or '默认'
             a_new_form = menu.addAction(u"在「{}」下新建表单".format(grp))
             a_new_form.setFont(QFont('', -1, QFont.Bold))
-            a_new_grp  = menu.addAction(u"新建分组")
             menu.addSeparator()
             a_rename   = menu.addAction(u"重命名分组")
             a_del_grp  = menu.addAction(u"删除分组")
@@ -376,8 +413,6 @@ class MainWindow(QMainWindow):
             act = menu.exec_(self.form_tree.viewport().mapToGlobal(pos))
             if act == a_new_form:
                 self._new_form(default_group=grp)
-            elif act == a_new_grp:
-                self._new_group()
             elif act == a_rename:
                 self._rename_group(grp)
             elif act == a_del_grp:
@@ -474,43 +509,10 @@ class MainWindow(QMainWindow):
         dlg = FormEditorDialog(None, FORMS_DIR, parent=self, default_group=default_group)
         if dlg.exec_():
             self._load_forms()
-            target_group = getattr(dlg, 'default_group', None)
+            target_group = getattr(dlg, 'saved_group', None) or getattr(dlg, 'default_group', None)
+            saved_path = getattr(dlg, 'saved_path', None)
             if target_group:
-                self._select_group_in_tree(target_group)
-
-    def _new_group(self):
-        group_name, ok = QInputDialog.getText(
-            self, u"新建分组", u"请输入新分组名称（将作为 forms 子目录）："
-        )
-        if not ok:
-            return
-        group_name = group_name.strip()
-        if not group_name:
-            QMessageBox.warning(self, u"提示", u"分组名称不能为空！")
-            return
-        import re
-        if re.search(r'[\\/:*?"<>|]', group_name):
-            QMessageBox.warning(self, u"提示", u'分组名称不能包含以下特殊字符：\n\\ / : * ? " < > |')
-            return
-        group_dir = os.path.join(FORMS_DIR, group_name)
-        if os.path.exists(group_dir):
-            QMessageBox.information(self, u"提示", u"分组「{}」已存在！".format(group_name))
-            self._select_group_in_tree(group_name)
-            return
-        try:
-            os.makedirs(group_dir, exist_ok=True)
-            self._load_forms()
-            self._select_group_in_tree(group_name)
-            self.statusBar().showMessage(u"新建分组「{}」成功".format(group_name), 4000)
-            reply = QMessageBox.question(
-                self, u"新建分组成功",
-                u"分组「{}」已成功创建。\n是否立即在该分组下新建表单？".format(group_name),
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply == QMessageBox.Yes:
-                self._new_form(default_group=group_name)
-        except Exception as e:
-            QMessageBox.critical(self, u"创建分组失败", str(e))
+                self._select_group_in_tree(target_group, file_path=saved_path)
 
     def _rename_group(self, old_group):
         new_group, ok = QInputDialog.getText(
@@ -580,13 +582,23 @@ class MainWindow(QMainWindow):
         except Exception:
             subprocess.Popen(['explorer', group_dir])
 
-    def _select_group_in_tree(self, group_name):
+    def _select_group_in_tree(self, group_name, file_path=None):
         for i in range(self.form_tree.topLevelItemCount()):
             top = self.form_tree.topLevelItem(i)
             if top.data(0, Qt.UserRole + 1) == group_name:
-                self.form_tree.setCurrentItem(top)
                 top.setExpanded(True)
-                self.form_tree.scrollToItem(top)
+                target_item = top
+                if file_path:
+                    norm_path = os.path.normpath(file_path).lower()
+                    for j in range(top.childCount()):
+                        ch = top.child(j)
+                        form_obj = ch.data(0, Qt.UserRole)
+                        if isinstance(form_obj, QueryForm) and getattr(form_obj, 'file_path', None):
+                            if os.path.normpath(form_obj.file_path).lower() == norm_path:
+                                target_item = ch
+                                break
+                self.form_tree.setCurrentItem(target_item)
+                self.form_tree.scrollToItem(target_item)
                 break
 
     def _edit_form_by_path(self, form):

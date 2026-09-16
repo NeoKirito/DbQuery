@@ -159,6 +159,62 @@ class GroupAndFormLoadingTests(unittest.TestCase):
                 child = item.child(0)
                 self.assertIsInstance(child.data(0, Qt.UserRole), QueryForm)
 
+    def test_directly_copied_directory_and_gbk_encoded_files(self):
+        """测试直接复制进 forms 的分组目录与包含 GB18030/GBK 编码的文件能被及时正确识别"""
+        copied_group_dir = os.path.join(self.forms_dir, '体检中心')
+        os.makedirs(copied_group_dir, exist_ok=True)
+
+        gbk_file = os.path.join(copied_group_dir, '体检汇总表.qry')
+        gbk_content = (
+            "[meta]\n"
+            "title = 体检汇总表（GBK测试）\n"
+            "group = 随意默认\n"
+            "description = 这是一个GBK编码的表单\n"
+            "[params]\n"
+            "[sql]\n"
+            "SELECT 1\n"
+        ).encode('gb18030')
+
+        with open(gbk_file, 'wb') as f:
+            f.write(gbk_content)
+
+        data = FormParser.load_forms_from_dir(self.forms_dir)
+        self.assertIn('体检中心', data)
+        self.assertEqual(len(data['体检中心']), 1)
+        self.assertEqual(data['体检中心'][0].title, '体检汇总表（GBK测试）')
+        self.assertEqual(data['体检中心'][0].group, '体检中心')
+
+    def test_form_editor_creates_new_group_folder_by_typing(self):
+        """测试在新建表单时，直接在下拉框输入全新分组名称，保存时自动创建文件夹并正确归组"""
+        dlg = FormEditorDialog(None, self.forms_dir)
+        dlg.group_combo.setEditText('全新业务组')
+        dlg.filename_edit.setText('体检流水账')
+
+        save_path = dlg._get_save_path()
+        self.assertIsNotNone(save_path)
+        expected_dir = os.path.join(self.forms_dir, '全新业务组')
+        self.assertTrue(os.path.isdir(expected_dir))
+        self.assertEqual(save_path, os.path.join(expected_dir, '体检流水账.qry'))
+
+        ok = dlg._do_save(save_path)
+        self.assertTrue(ok)
+        self.assertEqual(dlg.saved_group, '全新业务组')
+        self.assertTrue(os.path.exists(save_path))
+
+        parsed = FormParser.parse_file(save_path, forms_root=self.forms_dir)
+        self.assertEqual(parsed.group, '全新业务组')
+
+    def test_no_standalone_new_group_button_in_toolbar(self):
+        """测试工具栏中已彻底移除独立的‘新建分组’按钮"""
+        from PyQt5.QtWidgets import QPushButton
+        win = MainWindow()
+        buttons = win.findChildren(QPushButton)
+        button_texts = [b.text() for b in buttons]
+        self.assertNotIn('新建分组', button_texts)
+        self.assertIn('新建表单', button_texts)
+        self.assertIn('刷新表单', button_texts)
+
 
 if __name__ == '__main__':
     unittest.main()
+

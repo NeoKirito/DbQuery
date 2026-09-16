@@ -137,7 +137,7 @@ class FormEditorDialog(QDialog):
             self.group_combo = QComboBox()
             self.group_combo.setEditable(True)
             self.group_combo.setInsertPolicy(QComboBox.NoInsert)
-            self.group_combo.setToolTip("可直接选择已有分组，或手动输入新分组名称（保存时将自动创建目录）")
+            self.group_combo.setToolTip("可直接下拉选择已有分组，或直接输入新分组名称（保存时将自动创建新文件夹）")
 
             existing_groups = []
             if os.path.isdir(self.forms_dir):
@@ -160,7 +160,11 @@ class FormEditorDialog(QDialog):
             self.filename_edit = QLineEdit()
             self.filename_edit.setPlaceholderText("文件名（不含 .qry 扩展名）")
 
+            group_hint = QLabel("（可下拉选择已有分组，或直接输入新分组名称）")
+            group_hint.setStyleSheet("color: #7A869A; font-size: 11px;")
+
             loc_form.addRow("所属分组:", self.group_combo)
+            loc_form.addRow("", group_hint)
             loc_form.addRow("文件名称:", self.filename_edit)
             layout.addWidget(loc_grp)
 
@@ -399,6 +403,8 @@ class FormEditorDialog(QDialog):
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(content)
             self.editor.setPlainText(content)
+            self.saved_group = folder_group
+            self.saved_path = path
 
             # 如果已有表单保存到了新路径（如修改了分组），移除旧位置文件
             if self.form and self.form.file_path and os.path.abspath(path) != os.path.abspath(self.form.file_path):
