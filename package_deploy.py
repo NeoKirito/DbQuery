@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 DBQuery 自动化打包与分发同步脚本
-部署架构规范：
-  - 外部根目录：放运维批处理脚本 (.bat)、配置文件 (config.ini)、表单目录 (forms/)、文档与前端 SDK、程序图标
-  - 内部 dist/ 目录：放 DBQuery.exe 及所有依赖 DLL、pyd、PyQt5、Web 模板与静态资源
+部署架构规范（极简易用）：
+  - 外部根目录：仅保留核心运维脚本（启动Web服务/停止Web服务/重启Web服务/启动桌面版）、配置文件（config.ini）、使用说明.txt 及分类文件夹
+  - 内部 dist/ 目录：放 DBQuery.exe 及所有依赖 DLL、pyd、PyQt5、Web 模板与静态资源、程序图标
+  - 内部 docs/ 目录：集中放置集成开发与部署升级文档
+  - 内部 sdk/ 目录：放置前端集成嵌入 SDK
+  - 内部 运维工具/ 目录：放置桌面快捷方式生成、系统图标缓存刷新及辅助脚本
 """
 import os
 import sys
@@ -266,7 +269,7 @@ echo   正在重启 DBQuery Web 服务...
 echo ================================================
 echo.
 
-call "%~dp0停止DBQueryWeb服务.bat" --no-pause
+call "%~dp0停止Web服务.bat" --no-pause
 if errorlevel 1 (
     echo.
     echo 停止旧服务失败，重启已取消。
@@ -274,7 +277,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-call "%~dp0启动DBQueryWeb服务.bat" %*
+call "%~dp0启动Web服务.bat" %*
 if errorlevel 1 (
     echo.
     echo 启动服务失败。
@@ -329,9 +332,9 @@ endlocal
 
 SHORTCUT_BAT = """@echo off
 title 创建桌面快捷方式
-cd /d "%~dp0"
+cd /d "%~dp0.."
 echo 正在为当前计算机创建桌面快捷方式...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = [System.Environment]::GetFolderPath('Desktop'); $shortcut = $ws.CreateShortcut((Join-Path $desktop 'DBQuery 数据库查询工具.lnk')); if (Test-Path (Join-Path '%~dp0' 'dist\\DBQuery.exe')) { $shortcut.TargetPath = (Join-Path '%~dp0' 'dist\\DBQuery.exe') } else { $shortcut.TargetPath = (Join-Path '%~dp0' 'DBQuery.exe') }; $shortcut.WorkingDirectory = '%~dp0'; $ico = (Join-Path '%~dp0' 'app.ico'); if (Test-Path $ico) { $shortcut.IconLocation = $ico + ',0' }; $shortcut.Description = 'DBQuery 数据库查询工具'; $shortcut.Save(); Write-Host '桌面快捷方式已成功创建到桌面！'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws = New-Object -ComObject WScript.Shell; $desktop = [System.Environment]::GetFolderPath('Desktop'); $root = (Resolve-Path '%~dp0..').Path; $shortcut = $ws.CreateShortcut((Join-Path $desktop 'DBQuery 数据库查询工具.lnk')); $exe = Join-Path $root 'dist\\\\DBQuery.exe'; if (-not (Test-Path $exe)) { $exe = Join-Path $root 'DBQuery.exe' }; $shortcut.TargetPath = $exe; $shortcut.WorkingDirectory = $root; $ico = Join-Path $root 'dist\\\\app.ico'; if (-not (Test-Path $ico)) { $ico = Join-Path $root 'app.ico' }; if (Test-Path $ico) { $shortcut.IconLocation = $ico + ',0' }; $shortcut.Description = 'DBQuery 数据库查询工具'; $shortcut.Save(); Write-Host '桌面快捷方式已成功创建到桌面！'"
 echo.
 pause
 """
@@ -342,34 +345,72 @@ echo 正在刷新系统图标缓存...
 taskkill /f /im explorer.exe >nul 2>&1
 timeout /t 1 /nobreak >nul
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p = Join-Path $env:LOCALAPPDATA 'IconCache.db'; if (Test-Path $p) { Remove-Item -Force $p }"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft\\Windows\\Explorer\\iconcache*.db') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Microsoft\\\\Windows\\\\Explorer\\\\iconcache*.db') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue"
 start explorer.exe
 echo 图标缓存刷新完毕！
 timeout /t 2 >nul
 """
 
+RELAY_START_WEB = """@echo off
+cd /d "%~dp0.."
+call "%~dp0..\\启动Web服务.bat" %*
+"""
+
+RELAY_STOP_WEB = """@echo off
+cd /d "%~dp0.."
+call "%~dp0..\\停止Web服务.bat" %*
+"""
+
+RELAY_RESTART_WEB = """@echo off
+cd /d "%~dp0.."
+call "%~dp0..\\重启Web服务.bat" %*
+"""
+
+RELAY_START_DESKTOP = """@echo off
+cd /d "%~dp0.."
+call "%~dp0..\\启动桌面版.bat" %*
+"""
+
+README_TXT = """======================================================================
+  DBQuery 数据库综合查询与报表系统 - 快速使用指引
+======================================================================
+
+【核心入口】（日常使用直接双击根目录下脚本即可）
+  1. 启动Web服务.bat    - 启动后台 Web 服务（自动放行防火墙并静默运行）
+  2. 停止Web服务.bat    - 一键停止后台运行的 Web 服务
+  3. 重启Web服务.bat    - 平滑重启 Web 服务并重新加载配置
+  4. 启动桌面版.bat     - 打开 DBQuery Windows 客户端桌面版图形界面
+  5. config.ini         - 主配置文件（可配置端口 port、数据源、超时等）
+
+【目录规划】
+  - forms/    : 报表查询方案文件（*.qry），按需添加或修改业务方案
+  - dist/     : 核心运行库、主程序 DBQuery.exe 及相关运行依赖
+  - docs/     : 接口集成、前端嵌入指南与部署施工升级文档
+  - sdk/      : 前端集成 SDK（dbquery-embed.js）
+  - 运维工具/ : 桌面快捷方式生成、系统图标缓存刷新及辅助脚本
+
+【默认访问地址】
+  - 默认端口: 6091 (可在 config.ini 中修改)
+  - 本地访问: http://localhost:6091/
+  - API 登录: http://localhost:6091/api/integration/frontend-login
+======================================================================
+"""
+
 
 def clean_root_obsolete_files(target_dir):
     """
-    清理根目录下遗留的旧版二进制、DLL 及运行库目录，确保根目录结构纯净。
+    清理根目录下遗留的旧版二进制、DLL、脚本及文档，确保根目录结构纯净极简。
     根目录白名单：
-      - 目录：dist, forms
-      - 文件：config.ini, app.ico, app.png, dbquery-embed.js, *.md, 施工文档, *.bat
+      - 目录：dist, forms, docs, sdk, 运维工具
+      - 文件：config.ini, 使用说明.txt, 启动web服务.bat, 停止web服务.bat, 重启web服务.bat, 启动桌面版.bat
     """
     if not os.path.exists(target_dir):
         return
 
-    allowed_dirs = {'dist', 'forms'}
+    allowed_dirs = {'dist', 'forms', 'docs', 'sdk', '运维工具'}
     exact_allowed_files = {
-        'config.ini', 'app.ico', 'app.png', 'dbquery-embed.js',
-        'readme.md', 'frontend_integration.md', 'host_integration.md',
-        '体检系统-dbquery综合查询与报表部署配置施工文档.docx',
-        '体检升级-施工升级文档.docx',
-        '启动dbquery桌面版.bat', 'start_desktop.bat',
-        '启动dbqueryweb服务.bat', 'start_web.bat',
-        '停止dbqueryweb服务.bat', 'stop_web.bat',
-        '重启dbqueryweb服务.bat', 'restart_web.bat',
-        '创建桌面快捷方式.bat', '刷新windows图标缓存.bat'
+        'config.ini', '使用说明.txt',
+        '启动web服务.bat', '停止web服务.bat', '重启web服务.bat', '启动桌面版.bat'
     }
 
     for item in list(os.listdir(target_dir)):
@@ -380,7 +421,7 @@ def clean_root_obsolete_files(target_dir):
                 shutil.rmtree(item_path, ignore_errors=True)
         else:
             if item.lower() not in exact_allowed_files:
-                print(f"    Cleaning non-whitelisted/obsolete file: {item}")
+                print(f"    Cleaning non-whitelisted/obsolete file from root: {item}")
                 try:
                     os.remove(item_path)
                 except Exception as e:
@@ -472,21 +513,22 @@ def assemble_deployment_folder(target_dir):
         if os.path.exists(cfg_src) and os.path.abspath(cfg_src) != os.path.abspath(cfg_dst):
             shutil.copy2(cfg_src, cfg_dst)
 
-    # 4. 根目录：图标与资源
+    # 4. 图标复制到 dist/ 目录（不散落在根目录）
     for icon in ["app.ico", "app.png"]:
         src_icon = os.path.join(REPO_DIR, icon)
-        dst_icon = os.path.join(target_dir, icon)
-        if os.path.exists(src_icon) and os.path.abspath(src_icon) != os.path.abspath(dst_icon):
+        dst_icon = os.path.join(inner_dist, icon)
+        if os.path.exists(src_icon):
             shutil.copy2(src_icon, dst_icon)
 
-    # 5. 根目录：文档与前端集成 SDK
-    for doc in ["README.md", "FRONTEND_INTEGRATION.md", "HOST_INTEGRATION.md", "dbquery-embed.js"]:
+    # 5. 文档集中归类到 docs/ 目录
+    docs_dir = os.path.join(target_dir, "docs")
+    os.makedirs(docs_dir, exist_ok=True)
+    for doc in ["README.md", "FRONTEND_INTEGRATION.md", "HOST_INTEGRATION.md"]:
         src_doc = os.path.join(REPO_DIR, doc)
         if not os.path.exists(src_doc):
             src_doc = os.path.join(ROOT_DIR, "DBQuery", doc)
-        dst_doc = os.path.join(target_dir, doc)
-        if os.path.exists(src_doc) and os.path.abspath(src_doc) != os.path.abspath(dst_doc):
-            shutil.copy2(src_doc, dst_doc)
+        if os.path.exists(src_doc):
+            shutil.copy2(src_doc, os.path.join(docs_dir, doc))
 
     for docx_name in ["体检系统-DBQuery综合查询与报表部署配置施工文档.docx", "体检升级-施工升级文档.docx"]:
         docx_src = os.path.join(REPO_DIR, docx_name)
@@ -494,35 +536,53 @@ def assemble_deployment_folder(target_dir):
             docx_src = os.path.join(ROOT_DIR, "DBQuery", docx_name)
         if not os.path.exists(docx_src):
             docx_src = os.path.join(ROOT_DIR, docx_name)
-        dst_docx = os.path.join(target_dir, docx_name)
-        if os.path.exists(docx_src) and os.path.abspath(docx_src) != os.path.abspath(dst_docx):
-            shutil.copy2(docx_src, dst_docx)
+        if os.path.exists(docx_src):
+            shutil.copy2(docx_src, os.path.join(docs_dir, docx_name))
 
-    # 6. 根目录：全套批处理脚本
-    with open(os.path.join(target_dir, "启动DBQuery桌面版.bat"), "w", encoding="gbk") as f:
-        f.write(START_DESKTOP_CN)
-    with open(os.path.join(target_dir, "start_desktop.bat"), "w", encoding="ascii") as f:
-        f.write(START_DESKTOP_EN)
+    # 6. 前端 SDK 集中归类到 sdk/ 目录
+    sdk_dir = os.path.join(target_dir, "sdk")
+    os.makedirs(sdk_dir, exist_ok=True)
+    sdk_src = os.path.join(REPO_DIR, "dbquery-embed.js")
+    if not os.path.exists(sdk_src):
+        sdk_src = os.path.join(ROOT_DIR, "DBQuery", "dbquery-embed.js")
+    if os.path.exists(sdk_src):
+        shutil.copy2(sdk_src, os.path.join(sdk_dir, "dbquery-embed.js"))
 
-    with open(os.path.join(target_dir, "启动DBQueryWeb服务.bat"), "w", encoding="gbk") as f:
+    # 7. 根目录：仅保留核心易用批处理与使用说明
+    with open(os.path.join(target_dir, "启动Web服务.bat"), "w", encoding="gbk") as f:
         f.write(START_WEB_CN)
-    with open(os.path.join(target_dir, "start_web.bat"), "w", encoding="ascii") as f:
-        f.write(START_WEB_EN)
-
-    with open(os.path.join(target_dir, "停止DBQueryWeb服务.bat"), "w", encoding="gbk") as f:
+    with open(os.path.join(target_dir, "停止Web服务.bat"), "w", encoding="gbk") as f:
         f.write(STOP_WEB_CN)
-    with open(os.path.join(target_dir, "stop_web.bat"), "w", encoding="ascii") as f:
-        f.write(STOP_WEB_EN)
-
-    with open(os.path.join(target_dir, "重启DBQueryWeb服务.bat"), "w", encoding="gbk") as f:
+    with open(os.path.join(target_dir, "重启Web服务.bat"), "w", encoding="gbk") as f:
         f.write(RESTART_WEB_CN)
-    with open(os.path.join(target_dir, "restart_web.bat"), "w", encoding="ascii") as f:
-        f.write(RESTART_WEB_EN)
+    with open(os.path.join(target_dir, "启动桌面版.bat"), "w", encoding="gbk") as f:
+        f.write(START_DESKTOP_CN)
+    with open(os.path.join(target_dir, "使用说明.txt"), "w", encoding="gbk") as f:
+        f.write(README_TXT)
 
-    with open(os.path.join(target_dir, "创建桌面快捷方式.bat"), "w", encoding="gbk") as f:
+    # 8. 运维工具与兼容脚本归类到 运维工具/ 目录
+    tools_dir = os.path.join(target_dir, "运维工具")
+    os.makedirs(tools_dir, exist_ok=True)
+    with open(os.path.join(tools_dir, "创建桌面快捷方式.bat"), "w", encoding="gbk") as f:
         f.write(SHORTCUT_BAT)
-    with open(os.path.join(target_dir, "刷新Windows图标缓存.bat"), "w", encoding="gbk") as f:
+    with open(os.path.join(tools_dir, "刷新Windows图标缓存.bat"), "w", encoding="gbk") as f:
         f.write(ICON_CACHE_BAT)
+    with open(os.path.join(tools_dir, "start_web.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_START_WEB)
+    with open(os.path.join(tools_dir, "stop_web.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_STOP_WEB)
+    with open(os.path.join(tools_dir, "restart_web.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_RESTART_WEB)
+    with open(os.path.join(tools_dir, "start_desktop.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_START_DESKTOP)
+    with open(os.path.join(tools_dir, "启动DBQueryWeb服务.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_START_WEB)
+    with open(os.path.join(tools_dir, "停止DBQueryWeb服务.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_STOP_WEB)
+    with open(os.path.join(tools_dir, "重启DBQueryWeb服务.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_RESTART_WEB)
+    with open(os.path.join(tools_dir, "启动DBQuery桌面版.bat"), "w", encoding="gbk") as f:
+        f.write(RELAY_START_DESKTOP)
 
     # 7. 清理临时日志与缓存
     for root, dirs, files in os.walk(target_dir):
