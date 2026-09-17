@@ -280,16 +280,37 @@ class QueryTab(QWidget):
         # 标题行
         title_row = QHBoxLayout()
         title_lbl = QLabel(u"<b>{}</b>".format(self.form.title))
-        title_lbl.setStyleSheet("font-size: 14px;")
+        title_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #1E293B;")
+
+        # 查询类型徽标
+        type_badge = QLabel(u"⚡ 存储过程" if self.form.query_type == 'exec' else u"📊 查询")
+        if self.form.query_type == 'exec':
+            type_badge.setStyleSheet(
+                "background: #FEF3C7; color: #D97706; font-size: 11px; font-weight: bold;"
+                "padding: 2px 8px; border-radius: 4px; border: 1px solid #FDE68A;"
+            )
+        else:
+            type_badge.setStyleSheet(
+                "background: #EFF6FF; color: #2563EB; font-size: 11px; font-weight: bold;"
+                "padding: 2px 8px; border-radius: 4px; border: 1px solid #BFDBFE;"
+            )
 
         desc_lbl = QLabel(self.form.description or '')
-        desc_lbl.setStyleSheet("color: #666; font-size: 11px; margin-left: 8px;")
+        desc_lbl.setStyleSheet("color: #64748B; font-size: 11px; margin-left: 6px;")
 
-        edit_btn = QPushButton(u"编辑表单")
-        edit_btn.setFixedWidth(80)
+        edit_btn = QPushButton(u"✏️ 编辑表单")
+        edit_btn.setFixedWidth(88)
+        edit_btn.setStyleSheet(
+            "QPushButton {"
+            "  background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;"
+            "  color: #475569; font-size: 11px; padding: 4px 8px;"
+            "}"
+            "QPushButton:hover { background: #EFF6FF; color: #1D4ED8; border-color: #93C5FD; }"
+        )
         edit_btn.clicked.connect(self._edit_form)
 
         title_row.addWidget(title_lbl)
+        title_row.addWidget(type_badge)
         title_row.addWidget(desc_lbl)
         title_row.addStretch()
         title_row.addWidget(edit_btn)
@@ -298,7 +319,7 @@ class QueryTab(QWidget):
         # 分隔线
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: #DDDDDD;")
+        line.setStyleSheet("color: #E2E8F0;")
         root.addWidget(line)
 
         # 查询条件区
@@ -322,21 +343,35 @@ class QueryTab(QWidget):
         # 操作行
         action_row = QHBoxLayout()
 
-        self.query_btn = QPushButton(u"  执行查询  ")
+        self.query_btn = QPushButton(u"  🔍 执行查询  ")
         self.query_btn.setStyleSheet(
             "QPushButton {"
-            "  background-color: #1a6eb5; color: white;"
-            "  padding: 5px 18px; border-radius: 4px;"
+            "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1D4ED8);"
+            "  color: white;"
+            "  padding: 6px 20px; border-radius: 4px;"
             "  font-weight: bold; font-size: 13px;"
+            "  border: 1px solid #1E40AF;"
             "}"
-            "QPushButton:hover  { background-color: #155ea0; }"
-            "QPushButton:pressed{ background-color: #0f4a80; }"
-            "QPushButton:disabled{ background-color: #9ab3ce; }"
+            "QPushButton:hover  { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); }"
+            "QPushButton:pressed{ background: #1E40AF; }"
+            "QPushButton:disabled{ background: #94A3B8; border-color: #94A3B8; color: #F1F5F9; }"
         )
         self.query_btn.clicked.connect(self._execute_query)
 
-        self.export_btn = QPushButton(u"导出 Excel")
+        self.export_btn = QPushButton(u"📥 导出 Excel")
         self.export_btn.setEnabled(False)
+        self.export_btn.setStyleSheet(
+            "QPushButton {"
+            "  background-color: #FFFFFF; color: #1E293B;"
+            "  padding: 5px 16px; border-radius: 4px;"
+            "  border: 1px solid #CBD5E1; font-size: 12px;"
+            "}"
+            "QPushButton:hover:enabled {"
+            "  background-color: #ECFDF5; color: #047857; border-color: #10B981; font-weight: bold;"
+            "}"
+            "QPushButton:pressed:enabled{ background-color: #D1FAE5; }"
+            "QPushButton:disabled{ background-color: #F8FAFC; color: #94A3B8; border-color: #E2E8F0; }"
+        )
         self.export_btn.clicked.connect(self._export_excel)
 
         self.progress = QProgressBar()
@@ -346,7 +381,7 @@ class QueryTab(QWidget):
         self.progress.hide()
 
         self.status_lbl = QLabel("")
-        self.status_lbl.setStyleSheet("color: #555; font-size: 11px;")
+        self.status_lbl.setStyleSheet("color: #64748B; font-size: 11px;")
 
         action_row.addWidget(self.query_btn)
         action_row.addWidget(self.export_btn)
@@ -409,6 +444,8 @@ class QueryTab(QWidget):
                 w.setDisplayFormat("yyyy-MM-dd")
                 self._set_date_control_value(w, default, is_datetime=False)
                 w.setMinimumWidth(110)
+                if hasattr(w, 'lineEdit') and w.lineEdit():
+                    w.lineEdit().returnPressed.connect(self._execute_query)
 
             elif param.ptype == 'datetime':
                 w = QDateTimeEdit()
@@ -416,6 +453,8 @@ class QueryTab(QWidget):
                 w.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
                 self._set_date_control_value(w, default, is_datetime=True)
                 w.setMinimumWidth(170)
+                if hasattr(w, 'lineEdit') and w.lineEdit():
+                    w.lineEdit().returnPressed.connect(self._execute_query)
 
             elif param.ptype == 'number':
                 w = QLineEdit()
@@ -440,6 +479,7 @@ class QueryTab(QWidget):
                 w.setPlainText(default)
                 w.setMinimumWidth(160)
                 w.setFixedHeight(54)
+                w.installEventFilter(self)
 
             elif param.ptype == 'checkbox':
                 w = QCheckBox(u"是")
@@ -855,18 +895,39 @@ class QueryTab(QWidget):
         if proxy is None:
             return
         menu = QMenu(self)
+
+        idx = self.table_view.indexAt(pos)
+        a_copy_cell = None
+        cell_data = None
+        if idx.isValid():
+            cell_data = proxy.data(idx)
+            cell_str = '' if cell_data is None else str(cell_data)
+            preview = (cell_str[:24] + '...') if len(cell_str) > 24 else cell_str
+            a_copy_cell = menu.addAction(u"复制单元格内容 (「{}」)".format(preview))
+            menu.addSeparator()
+
         a_copy     = menu.addAction(u"复制选中行")
         a_copy_hdr = menu.addAction(u"复制选中行（含表头）")
         menu.addSeparator()
         a_copy_all = menu.addAction(u"复制全部数据（含表头）")
 
         action = menu.exec_(self.table_view.viewport().mapToGlobal(pos))
-        if action == a_copy:
+        if action == a_copy_cell and idx.isValid():
+            QApplication.clipboard().setText('' if cell_data is None else str(cell_data))
+        elif action == a_copy:
             self._copy_selection(with_header=False)
         elif action == a_copy_hdr:
             self._copy_selection(with_header=True)
         elif action == a_copy_all:
             self._copy_all()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress:
+            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if event.modifiers() & Qt.ControlModifier:
+                    self._execute_query()
+                    return True
+        return super(QueryTab, self).eventFilter(obj, event)
 
     def _copy_selection(self, with_header=False):
         proxy    = self.table_view.model()

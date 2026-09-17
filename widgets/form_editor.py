@@ -16,6 +16,7 @@ from PyQt5.QtGui import (
 )
 from form_parser import TEMPLATE, FormParser
 from core.param_service import validate_options_sql, sql_placeholders
+from core.sql_safety import normalize_sql_for_safety
 
 
 # ──────────────────────────────────────────────
@@ -465,9 +466,8 @@ class FormEditorDialog(QDialog):
                 if p not in placeholders:
                     warnings.append("参数「{}」已在 [params] 中定义，但未在 SQL 脚本中被引用".format(p))
 
-            # 单引号匹配启发式检查（过滤注释）
-            no_comment_sql = re.sub(r'--[^\n]*', '', sql)
-            no_comment_sql = re.sub(r'/\*.*?\*/', '', no_comment_sql, flags=re.DOTALL)
+            # 单引号与圆括号匹配启发式检查（过滤包含 #、--、/* */ 的全部注释）
+            no_comment_sql = normalize_sql_for_safety(sql)
             clean_quotes = no_comment_sql.replace("''", "")
             if clean_quotes.count("'") % 2 != 0:
                 warnings.append("SQL 脚本中的单引号数量不成对，可能存在未闭合的字符串常量")

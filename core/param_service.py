@@ -9,7 +9,7 @@ import datetime
 import logging
 import re
 
-from core.sql_safety import normalize_sql_for_safety
+from core.sql_safety import normalize_sql_for_safety, convert_hash_comments_to_sql
 from decimal import Decimal, InvalidOperation
 
 
@@ -230,7 +230,7 @@ def build_sql_with_params(form, normalized_params):
             continue
         sql = sql.replace('{' + name + '}', escape_sql_param(_string(normalized_params[name])))
     ensure_sql_placeholders_resolved(form, sql)
-    return sql
+    return convert_hash_comments_to_sql(sql)
 
 
 def validate_options_sql(sql):
@@ -256,9 +256,11 @@ def dynamic_options(param, db_manager, timeout=OPTIONS_QUERY_TIMEOUT,
     if not safe:
         raise OptionsLoadError('候选项 SQL 配置无效：{}'.format(reason))
 
+    exec_options_sql = convert_hash_comments_to_sql(options_sql)
+
     try:
         columns, rows, _ = db_manager.execute_query_limited(
-            options_sql,
+            exec_options_sql,
             query_timeout=timeout,
             max_rows=max_rows,
             query_type='select'

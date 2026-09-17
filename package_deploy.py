@@ -384,6 +384,7 @@ README_TXT = """================================================================
 
 【目录规划】
   - forms/    : 报表查询方案文件（*.qry），按需添加或修改业务方案
+  - logs/     : 系统运行日志（按天自动轮转，桌面端 desktop_YYYY-MM-DD.log 与 Web 端 web_YYYY-MM-DD.log 分开保存）
   - dist/     : 核心运行库、主程序 DBQuery.exe 及相关运行依赖
   - docs/     : 接口集成、前端嵌入指南与部署施工升级文档
   - sdk/      : 前端集成 SDK（dbquery-embed.js）
@@ -401,13 +402,13 @@ def clean_root_obsolete_files(target_dir):
     """
     清理根目录下遗留的旧版二进制、DLL、脚本及文档，确保根目录结构纯净极简。
     根目录白名单：
-      - 目录：dist, forms, docs, sdk, 运维工具
+      - 目录：dist, forms, docs, sdk, 运维工具, logs
       - 文件：config.ini, 使用说明.txt, 启动web服务.bat, 停止web服务.bat, 重启web服务.bat, 启动桌面版.bat
     """
     if not os.path.exists(target_dir):
         return
 
-    allowed_dirs = {'dist', 'forms', 'docs', 'sdk', '运维工具'}
+    allowed_dirs = {'dist', 'forms', 'docs', 'sdk', '运维工具', 'logs'}
     exact_allowed_files = {
         'config.ini', '使用说明.txt',
         '启动web服务.bat', '停止web服务.bat', '重启web服务.bat', '启动桌面版.bat'
@@ -547,6 +548,19 @@ def assemble_deployment_folder(target_dir):
         sdk_src = os.path.join(ROOT_DIR, "DBQuery", "dbquery-embed.js")
     if os.path.exists(sdk_src):
         shutil.copy2(sdk_src, os.path.join(sdk_dir, "dbquery-embed.js"))
+
+    # 6.5 根目录：logs/ 目录（用于按天存放桌面端与 Web 端日志）
+    logs_dir = os.path.join(target_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    for log_file in os.listdir(logs_dir):
+        if log_file.endswith('.log'):
+            try:
+                os.remove(os.path.join(logs_dir, log_file))
+            except Exception:
+                pass
+    gitkeep = os.path.join(logs_dir, ".gitkeep")
+    if not os.path.exists(gitkeep):
+        open(gitkeep, "w").close()
 
     # 7. 根目录：仅保留核心易用批处理与使用说明
     with open(os.path.join(target_dir, "启动Web服务.bat"), "w", encoding="gbk") as f:

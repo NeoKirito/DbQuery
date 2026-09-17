@@ -41,11 +41,9 @@ from core.param_service import (
     normalize_params, static_options
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('DBQuery.web')
+from core.logger import setup_logging
+
+logger = setup_logging('web')
 
 FORMS_DIR = get_forms_dir()
 

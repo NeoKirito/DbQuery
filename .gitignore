@@ -10,3 +10,5 @@ dist_final/
 
 # Runtime logs
 *.log
+logs/*.log
+!logs/.gitkeep

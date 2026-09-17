@@ -16,6 +16,7 @@ import pyodbc
 logger = logging.getLogger('DBQuery.db_manager')
 
 from core.paths import get_app_dir, get_config_path
+from core.sql_safety import convert_hash_comments_to_sql
 
 BASE_DIR = get_app_dir()
 CONFIG_PATH = get_config_path()
@@ -347,8 +348,9 @@ class DBManager:
         cursor = None
         try:
             cursor = conn.cursor()
-            logger.debug('Executing SQL: %s', sql[:200] if sql else 'EMPTY')
-            cursor.execute(sql)
+            exec_sql = convert_hash_comments_to_sql(sql)
+            logger.debug('Executing SQL: %s', exec_sql[:200] if exec_sql else 'EMPTY')
+            cursor.execute(exec_sql)
             if cursor.description is None:
                 return [], [], False
 
@@ -409,8 +411,9 @@ class DBManager:
         cursor = None
         try:
             cursor = conn.cursor()
-            logger.debug('Executing desktop SQL: %s', sql[:200] if sql else 'EMPTY')
-            cursor.execute(sql)
+            exec_sql = convert_hash_comments_to_sql(sql)
+            logger.debug('Executing desktop SQL: %s', exec_sql[:200] if exec_sql else 'EMPTY')
+            cursor.execute(exec_sql)
             if cursor.description is None:
                 return [], []
             columns = [desc[0] for desc in cursor.description]

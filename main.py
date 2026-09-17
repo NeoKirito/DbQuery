@@ -9,23 +9,23 @@ import traceback
 import ctypes
 from ctypes import wintypes
 
-from core.paths import get_app_dir, get_exe_dir, get_forms_dir
+from core.paths import get_app_dir, get_exe_dir, get_forms_dir, get_logs_dir
+from core.logger import setup_logging
 
 BASE_DIR = get_app_dir()
 EXE_DIR = get_exe_dir()
 FORMS_DIR = get_forms_dir()
 
-# 配置日志
-log_file = os.path.join(BASE_DIR, 'dbquery.log')
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file, encoding='utf-8'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
-logger = logging.getLogger('DBQuery.main')
+# 配置独立按天轮转日志（写入 logs/desktop_YYYY-MM-DD.log）
+logger = setup_logging('desktop')
+
+
+def _global_exception_hook(exctype, value, tb):
+    logger.critical("Unhandled desktop exception: %s", value, exc_info=(exctype, value, tb))
+    sys.__excepthook__(exctype, value, tb)
+
+
+sys.excepthook = _global_exception_hook
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -285,16 +285,65 @@ class MainWindow(QMainWindow):
         self.tab_widget.setMovable(True)
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
 
-        # 占位页（无 close 按钮）
-        self._welcome = QLabel(
-            u"←  双击左侧表单开始查询\n\n右键表单可编辑或删除"
+        # 占位页（卡片式指引页，无 close 按钮）
+        self._welcome = QWidget()
+        self._welcome.setStyleSheet("background: #F8FAFC;")
+        w_layout = QVBoxLayout(self._welcome)
+        w_layout.setAlignment(Qt.AlignCenter)
+
+        card = QFrame()
+        card.setObjectName("welcomeCard")
+        card.setFixedWidth(540)
+        card.setStyleSheet(
+            "QFrame#welcomeCard {"
+            "  background: #FFFFFF;"
+            "  border: 1px solid #E2E8F0;"
+            "  border-radius: 12px;"
+            "}"
         )
-        self._welcome.setAlignment(Qt.AlignCenter)
-        self._welcome.setStyleSheet(
-            "color: #B0BECE; font-size: 15px; line-height: 2;"
-            "background: #F8FAFD;"
-        )
-        self.tab_widget.addTab(self._welcome, u"欢迎")
+        card_v = QVBoxLayout(card)
+        card_v.setContentsMargins(32, 28, 32, 28)
+        card_v.setSpacing(12)
+
+        w_title = QLabel(u"欢迎使用 DBQuery 综合查询系统")
+        w_title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1E293B;")
+        w_title.setAlignment(Qt.AlignCenter)
+
+        w_sub = QLabel(u"高性能 SQL Server 报表与数据查询桌面客户端")
+        w_sub.setStyleSheet("font-size: 12px; color: #64748B; margin-bottom: 4px;")
+        w_sub.setAlignment(Qt.AlignCenter)
+
+        card_v.addWidget(w_title)
+        card_v.addWidget(w_sub)
+
+        w_sep = QFrame()
+        w_sep.setFrameShape(QFrame.HLine)
+        w_sep.setStyleSheet("color: #F1F5F9; margin: 4px 0;")
+        card_v.addWidget(w_sep)
+
+        tips = [
+            (u"📋", u"双击左侧列表中的表单名称，即可快速打开查询标签页"),
+            (u"⌨️", u"查询条件输入框支持直接按【回车键】立即执行查询"),
+            (u"📊", u"查询结果支持多列即时过滤、点击表头快速升降序排序"),
+            (u"📥", u"支持一键无损导出 Excel 表格，后台异步处理不卡顿"),
+            (u"🖱️", u"右键表格数据行可快捷复制单元格或整行数据"),
+        ]
+        for icon, tip_text in tips:
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            ic_lbl = QLabel(icon)
+            ic_lbl.setStyleSheet("font-size: 15px;")
+            ic_lbl.setFixedWidth(24)
+            ic_lbl.setAlignment(Qt.AlignCenter)
+            tx_lbl = QLabel(tip_text)
+            tx_lbl.setStyleSheet("font-size: 13px; color: #334155; line-height: 1.4;")
+            row.addWidget(ic_lbl)
+            row.addWidget(tx_lbl, stretch=1)
+            card_v.addLayout(row)
+
+        w_layout.addWidget(card)
+
+        self.tab_widget.addTab(self._welcome, u"🏠 首页")
         self.tab_widget.tabBar().setTabButton(0, QTabBar.RightSide, None)
 
         splitter.addWidget(left)
@@ -307,6 +356,12 @@ class MainWindow(QMainWindow):
 
         # ── 状态栏 ──────────────────────────
         self.statusBar().showMessage(u"就绪")
+        self.status_db_lbl = QLabel(u"🗄️ 数据库: 未测试")
+        self.status_db_lbl.setStyleSheet("color: #94A3B8; font-size: 11px; margin-right: 14px;")
+        self.status_ver_lbl = QLabel(u"DBQuery 桌面端")
+        self.status_ver_lbl.setStyleSheet("color: #64748B; font-size: 11px; margin-right: 8px;")
+        self.statusBar().addPermanentWidget(self.status_db_lbl)
+        self.statusBar().addPermanentWidget(self.status_ver_lbl)
 
     def setWindowTitle(self, title):
         super(MainWindow, self).setWindowTitle(title)
@@ -414,6 +469,19 @@ class MainWindow(QMainWindow):
             "color: {}; font-size: 12px;".format(color)
         )
         self.conn_lbl.setText(text)
+        if hasattr(self, 'status_db_lbl'):
+            cfg = self.db_manager.get_db_config() if hasattr(self, 'db_manager') else {}
+            srv = cfg.get('server', 'localhost')
+            db = cfg.get('database', 'master')
+            self.status_db_lbl.setText(u"🗄️ 数据库: {}/{} ({})".format(srv, db, text))
+            if status == STATUS_OK:
+                self.status_db_lbl.setStyleSheet("color: #4ADE80; font-size: 11px; margin-right: 14px;")
+            elif status == STATUS_FAIL:
+                self.status_db_lbl.setStyleSheet("color: #F87171; font-size: 11px; margin-right: 14px;")
+            elif status == STATUS_TESTING:
+                self.status_db_lbl.setStyleSheet("color: #FBBF24; font-size: 11px; margin-right: 14px;")
+            else:
+                self.status_db_lbl.setStyleSheet("color: #94A3B8; font-size: 11px; margin-right: 14px;")
         if msg:
             self.statusBar().showMessage(msg[:120])
 
@@ -531,25 +599,26 @@ class MainWindow(QMainWindow):
             if ft and not matching_forms and ft not in group.lower():
                 continue
 
-            grp_item = QTreeWidgetItem([u"  " + group])
+            grp_item = QTreeWidgetItem([u"📁 " + group])
             grp_item.setData(0, Qt.UserRole, None)  # None 表示分组项
             grp_item.setData(0, Qt.UserRole + 1, group)
-            grp_item.setForeground(0, QColor('#0055AA'))
+            grp_item.setForeground(0, QColor('#1D4ED8'))
             grp_item.setFont(0, QFont('', -1, QFont.Bold))
 
             if matching_forms:
                 for form in matching_forms:
-                    child = QTreeWidgetItem([u"    " + form.title])
+                    icon_prefix = u"⚡ " if form.query_type == 'exec' else u"📄 "
+                    child = QTreeWidgetItem([u"  " + icon_prefix + form.title])
                     child.setData(0, Qt.UserRole, form)
                     child.setData(0, Qt.UserRole + 1, group)
                     child.setToolTip(0, form.description or form.file_path)
                     grp_item.addChild(child)
             elif not ft:
                 # 空分组友好占位提示
-                placeholder = QTreeWidgetItem([u"    (空分组 - 双击新建表单)"])
+                placeholder = QTreeWidgetItem([u"  ➕ (空分组 - 双击新建表单)"])
                 placeholder.setData(0, Qt.UserRole, '__placeholder__')
                 placeholder.setData(0, Qt.UserRole + 1, group)
-                placeholder.setForeground(0, QColor('#909399'))
+                placeholder.setForeground(0, QColor('#94A3B8'))
                 pfont = placeholder.font(0)
                 pfont.setItalic(True)
                 placeholder.setFont(0, pfont)
@@ -877,51 +946,8 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
-# ════════════════════════════════════════
-#  程序入口
-# ════════════════════════════════════════
-def main():
-    logger.info("=" * 50)
-    logger.info("DBQuery starting...")
-    logger.info("Python version: %s", sys.version)
-    logger.info("Executable: %s", sys.executable)
-    logger.info("Frozen: %s", getattr(sys, 'frozen', False))
-
-    # 高 DPI 支持（Win10/11）
-    try:
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,    True)
-        logger.info("High DPI support enabled")
-    except Exception as e:
-        logger.warning("High DPI support failed: %s", str(e))
-
-    try:
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('neokirito.dbquery.app.v1')
-    except Exception:
-        pass
-
-    try:
-        app = QApplication(sys.argv)
-        app.setStyle('Fusion')
-        QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)
-        app_icon_path = os.path.join(BASE_DIR, 'app.ico')
-        if not os.path.exists(app_icon_path):
-            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
-        if not os.path.exists(app_icon_path):
-            app_icon_path = os.path.join(BASE_DIR, 'app.png')
-        if not os.path.exists(app_icon_path):
-            app_icon_path = os.path.join(EXE_DIR, 'app.png')
-        if os.path.exists(app_icon_path):
-            app.setWindowIcon(QIcon(app_icon_path))
-        logger.info("QApplication created")
-    except Exception as e:
-        logger.error("Failed to create QApplication: %s", str(e))
-        logger.error(traceback.format_exc())
-        raise
-
-    # ── 全局样式表（Fusion 风格 + 专业深色工具栏主题）──
-    app.setStyleSheet(u"""
+# ── 全局样式表（Fusion 风格 + 专业深色工具栏主题）──
+GLOBAL_STYLESHEET = u"""
 /* ── 全局基础 ── */
 QWidget {
     font-family: "Microsoft YaHei", "微软雅黑", "SimSun", sans-serif;
@@ -1090,21 +1116,25 @@ QGroupBox::title {
 /* ── 左侧树形列表 ── */
 QTreeWidget {
     background: #FFFFFF;
-    border: 1px solid #D0D8E4;
+    border: 1px solid #CBD5E1;
     border-radius: 6px;
     outline: none;
+    padding: 2px;
 }
 QTreeWidget::item {
-    height: 28px;
-    padding-left: 4px;
-    border-radius: 3px;
+    height: 30px;
+    padding-left: 6px;
+    border-radius: 4px;
+    margin: 1px 2px;
 }
 QTreeWidget::item:hover {
-    background: #EBF3FC;
+    background: #EFF6FF;
+    color: #1D4ED8;
 }
 QTreeWidget::item:selected {
-    background: #1A6EB5;
+    background: #2563EB;
     color: #FFFFFF;
+    font-weight: bold;
 }
 QTreeWidget::branch {
     background: transparent;
@@ -1112,44 +1142,52 @@ QTreeWidget::branch {
 
 /* ── 标签页 ── */
 QTabWidget::pane {
-    border: 1px solid #D0D8E4;
+    border: 1px solid #CBD5E1;
     border-radius: 0 6px 6px 6px;
     background: #FFFFFF;
     top: -1px;
 }
 QTabBar::tab {
-    background: #E4EAF2;
-    border: 1px solid #D0D8E4;
+    background: #E8EEF5;
+    border: 1px solid #CBD5E1;
     border-bottom: none;
-    padding: 6px 16px;
-    margin-right: 2px;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    color: #4A5568;
+    padding: 7px 18px;
+    margin-right: 3px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    color: #475569;
+    font-size: 12px;
 }
 QTabBar::tab:selected {
     background: #FFFFFF;
-    color: #1A6EB5;
+    color: #1D4ED8;
     font-weight: bold;
+    border-top: 3px solid #2563EB;
     border-bottom: 2px solid #FFFFFF;
 }
 QTabBar::tab:hover:!selected {
-    background: #D4E4F4;
-    color: #1A6EB5;
+    background: #DBEAFE;
+    color: #1D4ED8;
 }
 QTabBar::close-button {
     subcontrol-position: right;
+    margin-left: 4px;
+    border-radius: 6px;
+}
+QTabBar::close-button:hover {
+    background: #EF4444;
+    color: #FFFFFF;
 }
 
 /* ── 结果表格 ── */
 QTableView {
     background: #FFFFFF;
-    alternate-background-color: #F4F8FF;
-    border: 1px solid #D0D8E4;
+    alternate-background-color: #F8FAFC;
+    border: 1px solid #CBD5E1;
     border-radius: 4px;
-    gridline-color: #E8ECF4;
-    selection-background-color: #C8DEFA;
-    selection-color: #1A1A2E;
+    gridline-color: #E2E8F0;
+    selection-background-color: #BFDBFE;
+    selection-color: #0F172A;
     outline: none;
 }
 QTableView::item {
@@ -1157,28 +1195,29 @@ QTableView::item {
     border: none;
 }
 QTableView::item:selected {
-    background: #C8DEFA;
-    color: #1A1A2E;
+    background: #BFDBFE;
+    color: #0F172A;
 }
 QHeaderView {
     background: transparent;
 }
 QHeaderView::section {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                                stop:0 #2A4070, stop:1 #1E3050);
-    color: #E0ECFF;
+                                stop:0 #1E293B, stop:1 #0F172A);
+    color: #F1F5F9;
     border: none;
-    border-right: 1px solid #354E80;
-    border-bottom: 2px solid #1A6EB5;
-    padding: 5px 8px;
+    border-right: 1px solid #334155;
+    border-bottom: 2px solid #2563EB;
+    padding: 6px 8px;
     font-weight: bold;
+    font-size: 12px;
 }
 QHeaderView::section:hover {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                                stop:0 #3A5090, stop:1 #2A4070);
+                                stop:0 #334155, stop:1 #1E293B);
 }
 QHeaderView::section:checked {
-    background: #1A6EB5;
+    background: #2563EB;
 }
 
 /* ── 滚动条 ── */
@@ -1279,7 +1318,54 @@ QCheckBox::indicator:checked {
 QCheckBox::indicator:hover {
     border-color: #1A6EB5;
 }
-""")
+"""
+
+
+# ════════════════════════════════════════
+#  程序入口
+# ════════════════════════════════════════
+def main():
+    logger.info("=" * 50)
+    logger.info("DBQuery starting...")
+    logger.info("Python version: %s", sys.version)
+    logger.info("Executable: %s", sys.executable)
+    logger.info("Frozen: %s", getattr(sys, 'frozen', False))
+
+    # 高 DPI 支持（Win10/11）
+    try:
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps,    True)
+        logger.info("High DPI support enabled")
+    except Exception as e:
+        logger.warning("High DPI support failed: %s", str(e))
+
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID('neokirito.dbquery.app.v1')
+    except Exception:
+        pass
+
+    try:
+        app = QApplication(sys.argv)
+        app.setStyle('Fusion')
+        QApplication.setEffectEnabled(Qt.UI_AnimateCombo, False)
+        app_icon_path = os.path.join(BASE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.png')
+        if os.path.exists(app_icon_path):
+            app.setWindowIcon(QIcon(app_icon_path))
+        logger.info("QApplication created")
+    except Exception as e:
+        logger.error("Failed to create QApplication: %s", str(e))
+        logger.error(traceback.format_exc())
+        raise
+
+    # 应用全局样式表
+    app.setStyleSheet(GLOBAL_STYLESHEET)
 
     try:
         logger.info("Showing desktop login dialog...")

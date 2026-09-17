@@ -79,3 +79,15 @@ def get_resource_dir():
     if getattr(sys, 'frozen', False):
         return getattr(sys, '_MEIPASS', get_exe_dir())
     return get_app_dir()
+
+
+def get_logs_dir():
+    """获取日志目录 logs/（位于部署根目录下），自动创建并返回绝对路径"""
+    app_dir = get_app_dir()
+    logs_dir = os.path.join(app_dir, 'logs')
+    try:
+        if not os.path.isdir(logs_dir):
+            os.makedirs(logs_dir, exist_ok=True)
+    except Exception:
+        pass
+    return logs_dir
