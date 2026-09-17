@@ -33,8 +33,8 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QMessageBox, QLineEdit,
     QFrame, QSizePolicy, QAction, QTabBar, QInputDialog, QComboBox
 )
-from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QFileSystemWatcher, QEvent, QPoint
-from PyQt5.QtGui import QFont, QIcon, QColor, QPixmap
+from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QFileSystemWatcher, QEvent, QPoint, QRectF
+from PyQt5.QtGui import QFont, QIcon, QColor, QPixmap, QPainterPath, QRegion
 
 from db_manager import DBManager
 from form_parser import FormParser, QueryForm
@@ -121,6 +121,7 @@ class MainWindow(QMainWindow):
 
         self._setup_ui()
         self._load_forms()
+        self._apply_window_corners()
 
         # 启动后自动测试连接（静默）
         QTimer.singleShot(400, lambda: self._test_connection(silent=True))
@@ -200,7 +201,7 @@ class MainWindow(QMainWindow):
         # ── 窗口控制按钮（最小化、最大化/还原、关闭）──
         win_ctrls = QWidget()
         ctrl_layout = QHBoxLayout(win_ctrls)
-        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setContentsMargins(0, 0, 6, 0)
         ctrl_layout.setSpacing(2)
 
         self.btn_min = QPushButton(u"—")
@@ -379,9 +380,48 @@ class MainWindow(QMainWindow):
             if hasattr(self, 'btn_max'):
                 self.btn_max.setText(u"🗗")
                 self.btn_max.setToolTip(u"向下还原")
+        self._apply_window_corners()
+
+    def _apply_window_corners(self):
+        """为桌面程序窗口边缘设置圆角（Win11 DWM 系统圆角优先，Win10/Win7 采用窗口区域蒙版剪裁）"""
+        if self.isMaximized():
+            self.clearMask()
+            return
+
+        dwm_rounded = False
+        try:
+            hwnd = int(self.winId())
+            DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            DWMWCP_ROUND = 2
+            val = ctypes.c_int(DWMWCP_ROUND)
+            hr = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                wintypes.HWND(hwnd),
+                ctypes.c_uint(DWMWA_WINDOW_CORNER_PREFERENCE),
+                ctypes.byref(val),
+                ctypes.sizeof(val)
+            )
+            if hr == 0:
+                dwm_rounded = True
+        except Exception:
+            pass
+
+        if not dwm_rounded:
+            path = QPainterPath()
+            path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 8, 8)
+            region = QRegion(path.toFillPolygon().toPolygon())
+            self.setMask(region)
+
+    def resizeEvent(self, event):
+        super(MainWindow, self).resizeEvent(event)
+        self._apply_window_corners()
+
+    def showEvent(self, event):
+        super(MainWindow, self).showEvent(event)
+        self._apply_window_corners()
 
     def changeEvent(self, event):
         if event.type() == QEvent.WindowStateChange:
+            self._apply_window_corners()
             if hasattr(self, 'btn_max'):
                 if self.isMaximized():
                     self.btn_max.setText(u"🗗")
@@ -959,6 +999,7 @@ QWidget {
 QMainWindow {
     background-color: #F0F2F6;
     border: 1px solid #1E3050;
+    border-radius: 8px;
 }
 QDialog {
     background-color: #F0F2F6;
@@ -969,6 +1010,8 @@ QToolBar {
     background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
                                 stop:0 #1E3050, stop:1 #162540);
     border: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
     spacing: 6px;
     padding: 4px 8px;
 }
@@ -985,7 +1028,7 @@ QToolBar QPushButton {
     background: transparent;
     color: #D0E4FF;
     border: 1px solid #2E4570;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 4px 12px;
     font-size: 12px;
 }
@@ -1003,7 +1046,7 @@ QPushButton#btn_win_min, QPushButton#btn_win_max {
     background: transparent;
     color: #C8D8F0;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 11px;
     font-weight: bold;
     padding: 0;
@@ -1016,7 +1059,7 @@ QPushButton#btn_win_close {
     background: transparent;
     color: #C8D8F0;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 13px;
     font-weight: bold;
     padding: 0;
@@ -1034,8 +1077,8 @@ QPushButton#btn_win_close:pressed {
 QPushButton {
     background: #FFFFFF;
     border: 1px solid #C5CDD8;
-    border-radius: 4px;
-    padding: 4px 12px;
+    border-radius: 6px;
+    padding: 5px 14px;
     color: #1A1A2E;
 }
 QPushButton:hover {
@@ -1052,17 +1095,32 @@ QPushButton:disabled {
     border-color: #D8D8D8;
     color: #AAAAAA;
 }
+QPushButton:default {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1D4ED8);
+    color: #FFFFFF;
+    border: 1px solid #1E40AF;
+    font-weight: bold;
+}
+QPushButton:default:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
+    border-color: #1D4ED8;
+    color: #FFFFFF;
+}
+QPushButton:default:pressed {
+    background: #1E40AF;
+    color: #FFFFFF;
+}
 
 /* ── 输入框 ── */
-QLineEdit, QTextEdit {
+QLineEdit, QTextEdit, QPlainTextEdit {
     background: #FFFFFF;
     border: 1px solid #C5CDD8;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 4px 7px;
     selection-background-color: #1A6EB5;
     selection-color: #FFFFFF;
 }
-QLineEdit:focus, QTextEdit:focus {
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
     border-color: #1A6EB5;
     background: #FAFCFF;
 }
@@ -1071,7 +1129,7 @@ QLineEdit:focus, QTextEdit:focus {
 QDateEdit, QDateTimeEdit {
     background: #FFFFFF;
     border: 1px solid #C5CDD8;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 3px 6px;
 }
 QDateEdit:focus, QDateTimeEdit:focus {
@@ -1082,7 +1140,7 @@ QDateEdit:focus, QDateTimeEdit:focus {
 QComboBox {
     background: #FFFFFF;
     border: 1px solid #C5CDD8;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 3px 6px;
     min-height: 22px;
 }
@@ -1092,6 +1150,7 @@ QComboBox:focus {
 QComboBox QAbstractItemView {
     background: #FFFFFF;
     border: 1px solid #C5CDD8;
+    border-radius: 6px;
     selection-background-color: #1A6EB5;
     selection-color: #FFFFFF;
 }
@@ -1099,7 +1158,7 @@ QComboBox QAbstractItemView {
 /* ── 分组框 ── */
 QGroupBox {
     border: 1px solid #D0D8E4;
-    border-radius: 6px;
+    border-radius: 8px;
     margin-top: 10px;
     padding-top: 12px;
     background: #FFFFFF;
@@ -1117,7 +1176,7 @@ QGroupBox::title {
 QTreeWidget {
     background: #FFFFFF;
     border: 1px solid #CBD5E1;
-    border-radius: 6px;
+    border-radius: 8px;
     outline: none;
     padding: 2px;
     show-decoration-selected: 0;
@@ -1126,7 +1185,7 @@ QTreeWidget {
 QTreeWidget::item {
     height: 30px;
     padding-left: 6px;
-    border-radius: 4px;
+    border-radius: 6px;
     margin: 1px 2px;
 }
 QTreeWidget::item:hover {
@@ -1145,7 +1204,7 @@ QTreeWidget::branch {
 /* ── 标签页 ── */
 QTabWidget::pane {
     border: 1px solid #CBD5E1;
-    border-radius: 0 6px 6px 6px;
+    border-radius: 0 8px 8px 8px;
     background: #FFFFFF;
     top: -1px;
 }
@@ -1173,6 +1232,10 @@ QTabBar::tab:hover:!selected {
 }
 QTabBar::close-button {
     subcontrol-position: right;
+    border-radius: 4px;
+}
+QTabBar::close-button:hover {
+    background: #E2E8F0;
 }
 
 /* ── 结果表格 ── */
@@ -1180,7 +1243,7 @@ QTableView {
     background: #FFFFFF;
     alternate-background-color: #F8FAFC;
     border: 1px solid #CBD5E1;
-    border-radius: 4px;
+    border-radius: 6px;
     gridline-color: #E2E8F0;
     selection-background-color: #BFDBFE;
     selection-color: #0F172A;
@@ -1252,13 +1315,13 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QProgressBar {
     background: #E4EAF2;
     border: 1px solid #C5CDD8;
-    border-radius: 4px;
+    border-radius: 6px;
     text-align: center;
 }
 QProgressBar::chunk {
     background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
                                 stop:0 #1A6EB5, stop:1 #28A0D8);
-    border-radius: 3px;
+    border-radius: 5px;
 }
 
 /* ── 状态栏 ── */
@@ -1268,6 +1331,8 @@ QStatusBar {
     color: #90AACE;
     font-size: 11px;
     padding: 2px 8px;
+    border-bottom-left-radius: 8px;
+    border-bottom-right-radius: 8px;
 }
 QStatusBar::item { border: none; }
 
@@ -1283,7 +1348,7 @@ QSplitter::handle:horizontal {
 QMenu {
     background: #FFFFFF;
     border: 1px solid #C5CDD8;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 4px 0;
 }
 QMenu::item {

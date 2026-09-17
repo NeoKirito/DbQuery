@@ -44,9 +44,26 @@ class TestDesktopFramelessWindow(unittest.TestCase):
             win._toggle_maximize()
             self.assertEqual(win.btn_max.text(), u"🗗" if win.isMaximized() else u"⬜")
             win._toggle_maximize()
+
+            # 6. 验证窗口边缘圆角处理与最大化全屏还原
+            self.assertTrue(hasattr(win, '_apply_window_corners'))
+            win.resize(1100, 750)
+            win._apply_window_corners()
+            # 在非全屏下应具有有效蒙版或 DWM 圆角偏好
+            if not win.isMaximized():
+                self.assertFalse(win.mask().isEmpty(), "Window should have rounded mask in normal window state on Win10/7")
+            win._toggle_maximize()
+            if win.isMaximized():
+                self.assertTrue(win.mask().isEmpty(), "Window should clear mask when maximized to fill screen")
+            win._toggle_maximize()
+
+            # 7. 验证全局样式表中按钮及关键控件的圆角配置
+            self.assertIn("border-radius: 6px;", main.GLOBAL_STYLESHEET)
+            self.assertIn("border-radius: 8px;", main.GLOBAL_STYLESHEET)
         finally:
             win.close()
 
 
 if __name__ == '__main__':
     unittest.main()
+

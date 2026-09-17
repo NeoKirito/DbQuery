@@ -99,7 +99,7 @@ class LoginDialog(QDialog):
                 background-color: #FFFFFF;
                 color: #4A5568;
                 border: 1px solid #CBD5E1;
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 5px 14px;
                 font-size: 12px;
             }
@@ -121,7 +121,7 @@ class LoginDialog(QDialog):
                 background-color: #1A6EB5;
                 color: #FFFFFF;
                 border: 1px solid #145E9C;
-                border-radius: 4px;
+                border-radius: 6px;
                 padding: 5px 20px;
                 font-weight: bold;
                 font-size: 12px;

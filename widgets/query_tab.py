@@ -302,7 +302,7 @@ class QueryTab(QWidget):
         edit_btn.setFixedWidth(88)
         edit_btn.setStyleSheet(
             "QPushButton {"
-            "  background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 4px;"
+            "  background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px;"
             "  color: #475569; font-size: 11px; padding: 4px 8px;"
             "}"
             "QPushButton:hover { background: #EFF6FF; color: #1D4ED8; border-color: #93C5FD; }"
@@ -348,11 +348,11 @@ class QueryTab(QWidget):
             "QPushButton {"
             "  background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2563EB, stop:1 #1D4ED8);"
             "  color: white;"
-            "  padding: 6px 20px; border-radius: 4px;"
+            "  padding: 6px 20px; border-radius: 6px;"
             "  font-weight: bold; font-size: 13px;"
             "  border: 1px solid #1E40AF;"
             "}"
-            "QPushButton:hover  { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); }"
+            "QPushButton:hover  { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); border-color: #1D4ED8; }"
             "QPushButton:pressed{ background: #1E40AF; }"
             "QPushButton:disabled{ background: #94A3B8; border-color: #94A3B8; color: #F1F5F9; }"
         )
@@ -363,7 +363,7 @@ class QueryTab(QWidget):
         self.export_btn.setStyleSheet(
             "QPushButton {"
             "  background-color: #FFFFFF; color: #1E293B;"
-            "  padding: 5px 16px; border-radius: 4px;"
+            "  padding: 5px 16px; border-radius: 6px;"
             "  border: 1px solid #CBD5E1; font-size: 12px;"
             "}"
             "QPushButton:hover:enabled {"
