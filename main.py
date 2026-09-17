@@ -1120,6 +1120,8 @@ QTreeWidget {
     border-radius: 6px;
     outline: none;
     padding: 2px;
+    show-decoration-selected: 0;
+    selection-background-color: transparent;
 }
 QTreeWidget::item {
     height: 30px;
@@ -1171,12 +1173,6 @@ QTabBar::tab:hover:!selected {
 }
 QTabBar::close-button {
     subcontrol-position: right;
-    margin-left: 4px;
-    border-radius: 6px;
-}
-QTabBar::close-button:hover {
-    background: #EF4444;
-    color: #FFFFFF;
 }
 
 /* ── 结果表格 ── */
