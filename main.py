@@ -6,6 +6,8 @@ import sys
 import os
 import logging
 import traceback
+import ctypes
+from ctypes import wintypes
 
 from core.paths import get_app_dir, get_exe_dir, get_forms_dir
 
@@ -31,8 +33,8 @@ from PyQt5.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QMessageBox, QLineEdit,
     QFrame, QSizePolicy, QAction, QTabBar, QInputDialog, QComboBox
 )
-from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QFileSystemWatcher, QEvent
-from PyQt5.QtGui import QFont, QIcon, QColor
+from PyQt5.QtCore import Qt, QSize, QTimer, QThread, pyqtSignal, QFileSystemWatcher, QEvent, QPoint
+from PyQt5.QtGui import QFont, QIcon, QColor, QPixmap
 
 from db_manager import DBManager
 from form_parser import FormParser, QueryForm
@@ -73,20 +75,40 @@ class MainWindow(QMainWindow):
         self.forms_data  = {}   # {group: [QueryForm]}
         self._conn_status = STATUS_UNKNOWN
         self._conn_worker = None
+        self._drag_pos = None
+
+        # ── 无边框一体化窗口设置（去除原生白色标题栏）──
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
 
         self.setWindowTitle(u"数据库查询工具")
         self.setMinimumSize(1000, 680)
         self.resize(1300, 820)
 
-        app_icon_path = os.path.join(BASE_DIR, 'app.ico')
-        if not os.path.exists(app_icon_path):
-            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
-        if not os.path.exists(app_icon_path):
-            app_icon_path = os.path.join(BASE_DIR, 'app.png')
+        app_icon_path = os.path.join(BASE_DIR, 'app.png')
         if not os.path.exists(app_icon_path):
             app_icon_path = os.path.join(EXE_DIR, 'app.png')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(BASE_DIR, 'app.ico')
+        if not os.path.exists(app_icon_path):
+            app_icon_path = os.path.join(EXE_DIR, 'app.ico')
+        self._app_icon_path = app_icon_path
         if os.path.exists(app_icon_path):
             self.setWindowIcon(QIcon(app_icon_path))
+
+        # Windows DWM 阴影扩展
+        try:
+            hwnd = int(self.winId())
+            class MARGINS(ctypes.Structure):
+                _fields_ = [
+                    ("cxLeftWidth", ctypes.c_int),
+                    ("cxRightWidth", ctypes.c_int),
+                    ("cyTopHeight", ctypes.c_int),
+                    ("cyBottomHeight", ctypes.c_int),
+                ]
+            margins = MARGINS(1, 1, 1, 1)
+            ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(wintypes.HWND(hwnd), ctypes.byref(margins))
+        except Exception:
+            pass
 
         # ── 目录变更实时感知与文件监听器 ──
         self._fs_watcher = QFileSystemWatcher(self)
@@ -109,16 +131,37 @@ class MainWindow(QMainWindow):
     def _setup_ui(self):
         # ── 工具栏 ──────────────────────────
         tb = QToolBar(u"主工具栏")
+        self.toolbar = tb
         tb.setMovable(False)
         tb.setIconSize(QSize(16, 16))
+        tb.installEventFilter(self)
         self.addToolBar(tb)
 
-        # 应用名称
-        app_lbl = QLabel(u"  📊 数据库查询工具  ")
-        app_lbl.setStyleSheet(
-            "color: #90BAEE; font-size: 13px; font-weight: bold; letter-spacing: 1px;"
+        # ── 应用 Logo 与标题（替代原绿色 emoji）──
+        self.brand_widget = QWidget()
+        self.brand_widget.installEventFilter(self)
+        brand_layout = QHBoxLayout(self.brand_widget)
+        brand_layout.setContentsMargins(2, 0, 8, 0)
+        brand_layout.setSpacing(8)
+
+        self.logo_lbl = QLabel()
+        self.logo_lbl.installEventFilter(self)
+        if getattr(self, '_app_icon_path', None) and os.path.exists(self._app_icon_path):
+            pix = QPixmap(self._app_icon_path)
+            if not pix.isNull():
+                scaled_pix = pix.scaled(20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                self.logo_lbl.setPixmap(scaled_pix)
+                self.logo_lbl.setFixedSize(20, 20)
+                brand_layout.addWidget(self.logo_lbl)
+
+        self.app_title_lbl = QLabel(self.windowTitle())
+        self.app_title_lbl.setStyleSheet(
+            "color: #90BAEE; font-size: 13px; font-weight: bold; letter-spacing: 0.5px;"
         )
-        tb.addWidget(app_lbl)
+        self.app_title_lbl.installEventFilter(self)
+        brand_layout.addWidget(self.app_title_lbl)
+
+        tb.addWidget(self.brand_widget)
         tb.addSeparator()
 
         # 连接状态指示灯
@@ -148,10 +191,39 @@ class MainWindow(QMainWindow):
         tb.addWidget(btn_new)
         tb.addWidget(btn_refresh)
 
-        # 右侧弹簧
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        tb.addWidget(spacer)
+        # 右侧弹簧（用于拖拽窗口）
+        self.spacer = QWidget()
+        self.spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.spacer.installEventFilter(self)
+        tb.addWidget(self.spacer)
+
+        # ── 窗口控制按钮（最小化、最大化/还原、关闭）──
+        win_ctrls = QWidget()
+        ctrl_layout = QHBoxLayout(win_ctrls)
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setSpacing(2)
+
+        self.btn_min = QPushButton(u"—")
+        self.btn_min.setToolTip(u"最小化")
+        self.btn_min.setObjectName("btn_win_min")
+        self.btn_min.clicked.connect(self.showMinimized)
+
+        self.btn_max = QPushButton(u"⬜")
+        self.btn_max.setToolTip(u"最大化")
+        self.btn_max.setObjectName("btn_win_max")
+        self.btn_max.clicked.connect(self._toggle_maximize)
+
+        self.btn_close = QPushButton(u"✕")
+        self.btn_close.setToolTip(u"关闭")
+        self.btn_close.setObjectName("btn_win_close")
+        self.btn_close.clicked.connect(self.close)
+
+        for btn in (self.btn_min, self.btn_max, self.btn_close):
+            btn.setFixedSize(34, 26)
+            btn.setFocusPolicy(Qt.NoFocus)
+            ctrl_layout.addWidget(btn)
+
+        tb.addWidget(win_ctrls)
 
         # ── 主分割布局 ──────────────────────
         splitter = QSplitter(Qt.Horizontal)
@@ -235,6 +307,87 @@ class MainWindow(QMainWindow):
 
         # ── 状态栏 ──────────────────────────
         self.statusBar().showMessage(u"就绪")
+
+    def setWindowTitle(self, title):
+        super(MainWindow, self).setWindowTitle(title)
+        if hasattr(self, 'app_title_lbl'):
+            self.app_title_lbl.setText(title)
+
+    def _toggle_maximize(self):
+        if self.isMaximized():
+            self.showNormal()
+            if hasattr(self, 'btn_max'):
+                self.btn_max.setText(u"⬜")
+                self.btn_max.setToolTip(u"最大化")
+        else:
+            self.showMaximized()
+            if hasattr(self, 'btn_max'):
+                self.btn_max.setText(u"🗗")
+                self.btn_max.setToolTip(u"向下还原")
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.WindowStateChange:
+            if hasattr(self, 'btn_max'):
+                if self.isMaximized():
+                    self.btn_max.setText(u"🗗")
+                    self.btn_max.setToolTip(u"向下还原")
+                else:
+                    self.btn_max.setText(u"⬜")
+                    self.btn_max.setToolTip(u"最大化")
+        super(MainWindow, self).changeEvent(event)
+
+    def eventFilter(self, obj, event):
+        # 允许在工具栏空白区、品牌区和占位区拖拽窗口以及双击最大化/还原
+        drag_targets = (
+            getattr(self, 'toolbar', None),
+            getattr(self, 'spacer', None),
+            getattr(self, 'brand_widget', None),
+            getattr(self, 'app_title_lbl', None),
+            getattr(self, 'logo_lbl', None),
+        )
+        if obj in drag_targets and obj is not None:
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                if not self.isMaximized():
+                    self._drag_pos = event.globalPos() - self.frameGeometry().topLeft()
+                return True
+            elif event.type() == QEvent.MouseMove and event.buttons() == Qt.LeftButton:
+                if getattr(self, '_drag_pos', None) is not None and not self.isMaximized():
+                    self.move(event.globalPos() - self._drag_pos)
+                return True
+            elif event.type() == QEvent.MouseButtonRelease:
+                self._drag_pos = None
+                return True
+            elif event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+                self._toggle_maximize()
+                return True
+        return super(MainWindow, self).eventFilter(obj, event)
+
+    def nativeEvent(self, eventType, message):
+        retval, result = super(MainWindow, self).nativeEvent(eventType, message)
+        if eventType == b"windows_generic_MSG" and not self.isMaximized():
+            try:
+                msg = wintypes.MSG.from_address(int(message))
+                if msg.message == 0x0084:  # WM_NCHITTEST
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    pt = self.mapFromGlobal(QPoint(x, y))
+                    w = 6
+                    rect = self.rect()
+                    on_left = pt.x() < w
+                    on_right = pt.x() > rect.width() - w
+                    on_top = pt.y() < w
+                    on_bottom = pt.y() > rect.height() - w
+                    if on_top and on_left: return True, 13     # HTTOPLEFT
+                    if on_top and on_right: return True, 14    # HTTOPRIGHT
+                    if on_bottom and on_left: return True, 16  # HTBOTTOMLEFT
+                    if on_bottom and on_right: return True, 17 # HTBOTTOMRIGHT
+                    if on_left: return True, 10                # HTLEFT
+                    if on_right: return True, 11               # HTRIGHT
+                    if on_top: return True, 12                 # HTTOP
+                    if on_bottom: return True, 15              # HTBOTTOM
+            except Exception:
+                pass
+        return retval, result
 
     # ════════════════════════════════════════
     #  数据库连接相关
@@ -777,7 +930,11 @@ QWidget {
 }
 
 /* ── 主窗口 / 对话框 ── */
-QMainWindow, QDialog {
+QMainWindow {
+    background-color: #F0F2F6;
+    border: 1px solid #1E3050;
+}
+QDialog {
     background-color: #F0F2F6;
 }
 
@@ -787,7 +944,7 @@ QToolBar {
                                 stop:0 #1E3050, stop:1 #162540);
     border: none;
     spacing: 6px;
-    padding: 5px 10px;
+    padding: 4px 8px;
 }
 QToolBar QLabel {
     color: #C8D8F0;
@@ -813,6 +970,38 @@ QToolBar QPushButton:hover {
 }
 QToolBar QPushButton:pressed {
     background: #1A6EB5;
+}
+
+/* ── 窗口控制按钮 ── */
+QPushButton#btn_win_min, QPushButton#btn_win_max {
+    background: transparent;
+    color: #C8D8F0;
+    border: none;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: bold;
+    padding: 0;
+}
+QPushButton#btn_win_min:hover, QPushButton#btn_win_max:hover {
+    background: #2A4468;
+    color: #FFFFFF;
+}
+QPushButton#btn_win_close {
+    background: transparent;
+    color: #C8D8F0;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 0;
+}
+QPushButton#btn_win_close:hover {
+    background: #E81123;
+    color: #FFFFFF;
+}
+QPushButton#btn_win_close:pressed {
+    background: #BF0F1D;
+    color: #FFFFFF;
 }
 
 /* ── 普通按钮 ── */
