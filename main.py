@@ -537,7 +537,7 @@ class MainWindow(QMainWindow):
 
         target_idx = 0
         idx = 1
-        for grp in sorted(self.forms_data.keys()):
+        for grp in self.forms_data.keys():
             count = len(self.forms_data[grp])
             self.group_combo.addItem(u"📁 {} ({})".format(grp, count), userData=grp)
             if prev_group and grp == prev_group:
@@ -588,7 +588,7 @@ class MainWindow(QMainWindow):
         self.form_tree.clear()
         ft = filter_text.strip().lower()
 
-        for group in sorted(data.keys()):
+        for group in data.keys():
             if selected_group is not None and group != selected_group:
                 continue
 

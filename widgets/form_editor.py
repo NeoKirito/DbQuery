@@ -214,6 +214,17 @@ class FormEditorDialog(QDialog):
         access_row.addStretch()
         info_form.addRow("Web 权限:", access_row)
 
+        order_row = QHBoxLayout()
+        self.order_edit = QLineEdit()
+        self.order_edit.setPlaceholderText("排序序号（数字，越小越靠前，留空默认按名称自然排序）")
+        self.order_edit.setToolTip("设置表单在分组内的排序顺序，数值越小越靠前（例如 1, 2, 10 等）")
+        order_row.addWidget(self.order_edit, stretch=1)
+        order_hint = QLabel("（数值越小越靠前，留空默认按名称自然排序）")
+        order_hint.setStyleSheet("color: #7A869A; font-size: 11px;")
+        order_row.addWidget(order_hint)
+        info_form.addRow("显示排序:", order_row)
+        self.order_edit.textChanged.connect(self._on_order_edit_changed)
+
         layout.addWidget(info_grp)
 
         # 编辑器
@@ -305,6 +316,25 @@ class FormEditorDialog(QDialog):
             else:
                 self.group_combo.setEditText(grp)
             self.group_combo.blockSignals(False)
+
+            # 回填排序序号
+            order_text = ''
+            if hasattr(self.form, 'order') and self.form.order is not None:
+                val = self.form.order
+                order_text = str(int(val)) if int(val) == val else str(val)
+            elif meta_m:
+                for line in meta_m.group(1).splitlines():
+                    line = line.strip()
+                    if line.startswith(('#', ';')):
+                        continue
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        if k.strip().lower() in ('order', 'sort', 'sort_order', 'seq') and v.strip():
+                            order_text = v.strip()
+                            break
+            self.order_edit.blockSignals(True)
+            self.order_edit.setText(order_text)
+            self.order_edit.blockSignals(False)
         except Exception as e:
             QMessageBox.warning(self, "读取失败", "无法读取文件：\n{}".format(e))
 
@@ -313,6 +343,17 @@ class FormEditorDialog(QDialog):
         new_group = new_group.strip() or '默认'
         content = self.editor.toPlainText()
         updated = self._apply_group(content, new_group)
+        if updated != content:
+            cursor = self.editor.textCursor()
+            pos = cursor.position()
+            self.editor.setPlainText(updated)
+            cursor.setPosition(min(pos, len(updated)))
+            self.editor.setTextCursor(cursor)
+
+    def _on_order_edit_changed(self, new_val):
+        """当用户修改排序序号时，同步更新编辑器 [meta] 中的 order 属性"""
+        content = self.editor.toPlainText()
+        updated = self._apply_order(content)
         if updated != content:
             cursor = self.editor.textCursor()
             pos = cursor.position()
@@ -350,6 +391,29 @@ class FormEditorDialog(QDialog):
             meta_body = web_line.sub('web_enabled = ' + value, meta_body)
         else:
             meta_body = meta_body.rstrip() + '\nweb_enabled = ' + value + '\n'
+        start, end = meta_m.span(1)
+        return content[:start] + meta_body + content[end:]
+
+    def _apply_order(self, content):
+        """将排序序号安全写入 [meta]，保留其他元数据。若清空则移除 order 属性。"""
+        meta_m = re.search(r'\[meta\](.*?)(?=\n\s*\[|\Z)', content,
+                           re.DOTALL | re.IGNORECASE)
+        if not meta_m:
+            return content
+
+        order_val = self.order_edit.text().strip() if hasattr(self, 'order_edit') else ''
+        meta_body = meta_m.group(1)
+        order_line = re.compile(r'^\s*(?:order|sort|sort_order|seq)\s*=.*$', re.MULTILINE | re.IGNORECASE)
+        if order_val:
+            if order_line.search(meta_body):
+                meta_body = order_line.sub('order = ' + order_val, meta_body)
+            else:
+                meta_body = meta_body.rstrip() + '\norder = ' + order_val + '\n'
+        else:
+            if order_line.search(meta_body):
+                meta_body = order_line.sub('', meta_body)
+                meta_body = re.sub(r'\n{3,}', '\n\n', meta_body)
+
         start, end = meta_m.span(1)
         return content[:start] + meta_body + content[end:]
 
@@ -400,6 +464,11 @@ class FormEditorDialog(QDialog):
                     elif k == 'web_enabled':
                         if v.lower() not in ('true', 'false', '1', '0', 'yes', 'no', '是', '否'):
                             warnings.append("元数据 web_enabled='{}' 不是标准布尔值（建议使用 true 或 false）".format(v))
+                    elif k in ('order', 'sort', 'sort_order', 'seq'):
+                        try:
+                            float(v)
+                        except ValueError:
+                            errors.append("元数据 [meta] 中的 {}='{}' 无效，必须为数字（如 1, 2, 10 等）".format(k, v))
 
             if not meta_title:
                 warnings.append("元数据 [meta] 未配置 title，系统将默认使用文件名作为表单标题")
@@ -571,6 +640,7 @@ class FormEditorDialog(QDialog):
         raw_content = self.editor.toPlainText()
         content = self._apply_group(raw_content, folder_group)
         content = self._apply_web_enabled(content)
+        content = self._apply_order(content)
 
         # 提取 query_type（从 [meta] 段的 type 字段）
         query_type = 'select'
@@ -809,7 +879,7 @@ class FormEditorDialog(QDialog):
     AND DoctorID = '{doctor}'
 
 【其他说明】
-  [meta] 可填写 title、group、description、web_enabled；type 默认 select。
+  [meta] 可填写 title、group、order(显示排序序号，数值越小越靠前)、description、web_enabled；type 默认 select。
   SELECT 模式仅允许查询；exec 模式仅允许受控存储过程调用。参数中的单引号会自动转义。"""
         dialog = QDialog(self)
         dialog.setWindowTitle("表单格式说明")

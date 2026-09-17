@@ -15,6 +15,7 @@ TEMPLATE = u"""\
 title = 新建查询
 group = 默认
 description = 查询描述（可选）
+# order = 1        （排序序号，数字越小越靠前；留空默认按名称自然排序）
 # web_enabled = false  （默认 false；仅 true 时已登录 Web 用户可查看）
 # type = select    （默认，SELECT 查询）
 # type = exec      （存储过程，SQL 以 EXEC 开头）
@@ -99,6 +100,8 @@ class QueryForm:
         self.title = ''
         self.description = ''
         self.group = ''
+        self.order = None          # 表单排序权重（数值越小越靠前，如 1, 2, 10 等）
+        self.group_order = None    # 分组排序权重（可选）
         self.query_type = 'select'
         # 默认拒绝 Web 访问；必须在 [meta] 明确写 web_enabled = true。
         self.web_enabled = False
@@ -239,6 +242,8 @@ class FormParser:
                 content = form_file.read()
 
         meta_group = ''
+        meta_order = None
+        meta_group_order = None
         for line in FormParser._get_section(content, 'meta').splitlines():
             line = line.strip()
             if not line or line.startswith('#') or line.startswith(';'):
@@ -253,10 +258,23 @@ class FormParser:
                     form.description = value
                 elif key == 'group':
                     meta_group = value
+                elif key in ('order', 'sort', 'sort_order', 'seq'):
+                    try:
+                        meta_order = float(value)
+                    except ValueError:
+                        pass
+                elif key in ('group_order', 'group_sort'):
+                    try:
+                        meta_group_order = float(value)
+                    except ValueError:
+                        pass
                 elif key == 'type':
                     form.query_type = value.lower().strip()
                 elif key == 'web_enabled':
                     form.web_enabled = value.lower() in ('1', 'true', 'yes', 'on', '是')
+
+        form.order = meta_order
+        form.group_order = meta_group_order
 
         if not form.title:
             form.title = os.path.splitext(os.path.basename(file_path))[0]
@@ -347,12 +365,103 @@ class FormParser:
             os.makedirs(forms_dir)
 
     @staticmethod
-    def load_forms_from_dir(forms_dir):
-        """扫描 forms_dir 及其子目录中所有 .qry 文件，按分组返回。
+    def natural_sort_key(s):
+        """中英文与数字混合自然排序键。使 '11 - 副本 (2)' 排在 '11 - 副本 (10)' 前面。"""
+        if not s:
+            return []
+        parts = re.split(r'(\d+)', str(s).strip())
+        return [int(p) if p.isdigit() else p.lower() for p in parts if p != '']
+
+    @staticmethod
+    def get_configured_group_order(config_path=None):
+        """读取 config.ini 中 [groups] 下的 order 配置列表"""
+        from core.paths import get_config_path
+        if not config_path:
+            config_path = get_config_path()
+        if not config_path or not os.path.exists(config_path):
+            return []
+        import configparser
+        cp = configparser.ConfigParser()
+        try:
+            cp.read(config_path, encoding='utf-8')
+        except Exception:
+            try:
+                cp.read(config_path, encoding='gbk')
+            except Exception:
+                return []
+        if cp.has_section('groups') and cp.has_option('groups', 'order'):
+            raw = cp.get('groups', 'order')
+            return [item.strip() for item in raw.replace('，', ',').split(',') if item.strip()]
+        return []
+
+    @staticmethod
+    def get_group_sort_key(group_name, forms_in_group=None, configured_order=None):
+        """计算分组排序权重：
+        1. config.ini 中明确指定的分组优先级（最高优先级，数值越小越靠前）；
+        2. 该分组内表单中配置的最小 group_order（次高优先级）；
+        3. 文件夹/分组名称的前导数字编号（如 '01_报表' -> 1）；
+        4. 兜底自然字典序。
+        """
+        cfg_rank = 999999
+        if configured_order and group_name in configured_order:
+            cfg_rank = configured_order.index(group_name)
+
+        min_meta_order = 999999
+        if forms_in_group:
+            for f in forms_in_group:
+                g_ord = getattr(f, 'group_order', None)
+                if g_ord is not None and g_ord < min_meta_order:
+                    min_meta_order = g_ord
+
+        m = re.match(r'^\[?(\d+)(?:[\.\_\-\s\]]|$)', group_name)
+        leading_num = int(m.group(1)) if m else 999999
+
+        return (cfg_rank, min_meta_order, leading_num, FormParser.natural_sort_key(group_name))
+
+    @staticmethod
+    def get_form_sort_key(form):
+        """计算表单在分组内的排序权重：
+        1. 表单自身配置的 order（数值越小越靠前；未指定默认 999999）；
+        2. 表单标题自然字典序；
+        3. 文件名自然字典序。
+        """
+        order = getattr(form, 'order', None)
+        if order is None:
+            order = 999999
+        title = getattr(form, 'title', '')
+        file_path = getattr(form, 'file_path', '')
+        return (order, FormParser.natural_sort_key(title), FormParser.natural_sort_key(os.path.basename(file_path)))
+
+    @staticmethod
+    def sort_forms_dict(forms_data, forms_dir=None, config_path=None):
+        """对 forms_data（{group_name: [form1, form2, ...]}）进行严格统一排序，
+        返回包含已排序分组及已排序表单列表的 OrderedDict。
+        """
+        from collections import OrderedDict
+        configured_order = FormParser.get_configured_group_order(config_path)
+
+        sorted_groups = sorted(
+            forms_data.keys(),
+            key=lambda grp: FormParser.get_group_sort_key(
+                grp, forms_in_group=forms_data.get(grp), configured_order=configured_order
+            )
+        )
+
+        result = OrderedDict()
+        for grp in sorted_groups:
+            forms = forms_data.get(grp, [])
+            sorted_forms = sorted(forms, key=FormParser.get_form_sort_key)
+            result[grp] = sorted_forms
+
+        return result
+
+    @staticmethod
+    def load_forms_from_dir(forms_dir, config_path=None):
+        """扫描 forms_dir 及其子目录中所有 .qry 文件，按统一排序规则返回 OrderedDict。
         
         1. 预先注册 forms_dir 下的所有直接子目录（包括空目录），确保新建分组在界面中立即可见；
         2. 扫描所有 .qry 文件，严格依据所在子目录或 [meta] 归组；
-        3. 按分组名排序返回。
+        3. 统一按分组配置权重/自然排序及表单配置权重/自然排序返回。
         """
         result = {}
         FormParser.ensure_forms_dir(forms_dir)
@@ -376,4 +485,6 @@ class FormParser:
                     result.setdefault(group, []).append(form)
                 except Exception as exc:
                     print('[WARN] 加载表单失败 {}: {}'.format(path, exc))
-        return result
+
+        return FormParser.sort_forms_dict(result, forms_dir=forms_dir, config_path=config_path)
+
