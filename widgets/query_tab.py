@@ -927,18 +927,10 @@ class QueryTab(QWidget):
         else:
             self.block_tabs.hide()
         self.block_tabs.blockSignals(False)
-
-        # 检查首个表格是否有 summary_footer
-        for b in getattr(self.form, 'blocks', []):
-            if b.btype == 'table' and b.id in blocks_results:
-                b_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
-                if b_spec and hasattr(self, 'table_view') and self.table_view.model():
-                    current_model = self.table_view.model()
-                    if isinstance(current_model, ResultTableModel) and not current_model._summary_spec:
-                        current_model._summary_spec = b_spec
-                        current_model._recompute_summary()
-                        current_model.layoutChanged.emit()
-                break
+        
+        # 默认加载第一个表格区块
+        if hasattr(self, '_table_blocks') and self._table_blocks:
+            self._on_block_tab_changed(0)
 
     def _on_block_tab_changed(self, index):
         if not hasattr(self, '_table_blocks') or index < 0 or index >= len(self._table_blocks):

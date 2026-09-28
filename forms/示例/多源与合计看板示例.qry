@@ -7,7 +7,7 @@ layout = summary, dept_stat, detail
 
 [params]
 start_date = 统计开始日期 | date | {today}
-dept_name = 关注科室 | text | 内科 | placeholder=输入科室名称
+dept_name = 关注科室 | text | 内科 | placeholder=输入科室名称（支持内科/外科/检验科过滤）
 
 # ── 区块 1：顶部指标汇总卡（cards） ──
 [block.summary]
@@ -35,20 +35,23 @@ UNION ALL
 SELECT 
     N'检验科' AS 科室名称, 44 AS 体检人次, 11500.00 AS 应收金额, 11300.00 AS 实收金额
 
-# ── 区块 3：明细清单表（table + 自定义合计规则） ──
+# ── 区块 3：明细清单表（table + 自定义合计规则 + 参数联动） ──
 [block.detail]
 title = 人员明细清单
 type = table
 datasource = default
 summary_footer = sum:实收金额; count:体检号
 sql = SELECT 
-    N'TJ20260901' AS 体检号, N'张三' AS 姓名, N'内科' AS 所属科室, 280.00 AS 实收金额, N'已完成' AS 状态
+    N'TJ20260901' AS 体检号, N'张三' AS 姓名, N'内科' AS 所属科室, 280.00 AS 实收金额, N'{start_date}' AS 登记日期, N'已完成' AS 状态
+WHERE ('{dept_name}' = '' OR N'内科' LIKE '%' + N'{dept_name}' + '%')
 UNION ALL
 SELECT 
-    N'TJ20260902' AS 体检号, N'李四' AS 姓名, N'外科' AS 所属科室, 350.00 AS 实收金额, N'已完成' AS 状态
+    N'TJ20260902' AS 体检号, N'李四' AS 姓名, N'外科' AS 所属科室, 350.00 AS 实收金额, N'{start_date}' AS 登记日期, N'已完成' AS 状态
+WHERE ('{dept_name}' = '' OR N'外科' LIKE '%' + N'{dept_name}' + '%')
 UNION ALL
 SELECT 
-    N'TJ20260903' AS 体检号, N'王五' AS 姓名, N'检验科' AS 所属科室, 420.00 AS 实收金额, N'体检中' AS 状态
+    N'TJ20260903' AS 体检号, N'王五' AS 姓名, N'检验科' AS 所属科室, 420.00 AS 实收金额, N'{start_date}' AS 登记日期, N'体检中' AS 状态
+WHERE ('{dept_name}' = '' OR N'检验科' LIKE '%' + N'{dept_name}' + '%')
 
 # ══════════════════════════════════════════════════════════════
 #  多数据源与合计看板配置说明：

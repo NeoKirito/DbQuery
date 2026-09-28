@@ -1476,7 +1476,23 @@ body.standalone-mode .app-body {
     border-bottom: 1px solid #d8e1e7;
 }
 .result-panel .dataTables_scrollHead table,
-.result-panel .dataTables_scrollBody table { margin: 0 !important; }
+.result-panel .dataTables_scrollBody table,
+.result-panel .dataTables_scrollFoot table,
+#result-table,
+.result-table {
+    margin: 0 !important;
+    height: auto !important;
+}
+.result-panel .dataTables_scrollBody tbody tr,
+#result-table tbody tr {
+    height: 32px !important;
+}
+.result-panel .dataTables_scrollBody tbody td,
+#result-table tbody td {
+    height: 32px !important;
+    padding: 6px 10px !important;
+    vertical-align: middle !important;
+}
 .result-panel .dataTables_scrollHead th {
     padding: 6px 9px !important;
     color: #36566f !important;
