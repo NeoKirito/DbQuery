@@ -897,19 +897,22 @@ class FormEditorDialog(QDialog):
             p_grid_layout.addStretch()
 
             # 操作按钮模拟
-            act_box = QVBoxLayout()
-            act_box.setSpacing(2)
-            act_lbl = QLabel("&nbsp;")
-            act_box.addWidget(act_lbl)
             btn_row = QHBoxLayout()
+            btn_row.setSpacing(6)
             btn_query = QPushButton("▶ 查询")
-            btn_query.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 4px 12px; border-radius: 3px;")
+            btn_query.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 5px 14px; border-radius: 4px;")
             btn_export = QPushButton("📊 导出 Excel")
-            btn_export.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; padding: 4px 10px; border-radius: 3px;")
+            btn_export.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; padding: 5px 12px; border-radius: 4px;")
             btn_reset = QPushButton("↺ 重置")
+            btn_reset.setStyleSheet("background-color: #F1F5F9; color: #475569; border: 1px solid #CBD5E1; padding: 5px 10px; border-radius: 4px;")
             btn_row.addWidget(btn_query)
             btn_row.addWidget(btn_export)
             btn_row.addWidget(btn_reset)
+
+            act_box = QVBoxLayout()
+            act_box.setSpacing(2)
+            act_top_spacer = QLabel("")  # 空白占位以保持与左侧输入框垂直对齐，去除 nbsp
+            act_box.addWidget(act_top_spacer)
             act_box.addLayout(btn_row)
             p_grid_layout.addLayout(act_box)
 
@@ -926,23 +929,54 @@ class FormEditorDialog(QDialog):
             cards_flow = QHBoxLayout()
             cards_flow.setSpacing(12)
 
-            sample_cards = [
-                ("总登记人次", "1,580 人"),
-                ("体检实收总额", "¥ 328,600.00"),
-                ("平均单价", "¥ 207.97"),
-                ("完成率", "96.8%")
+            palette = [
+                {"top": "#2563EB", "num": "#1E3A8A", "bg": "#FFFFFF", "icon": "📊"},
+                {"top": "#059669", "num": "#065F46", "bg": "#FFFFFF", "icon": "📈"},
+                {"top": "#D97706", "num": "#92400E", "bg": "#FFFFFF", "icon": "🎯"},
+                {"top": "#7C3AED", "num": "#5B21B6", "bg": "#FFFFFF", "icon": "💎"},
+                {"top": "#0891B2", "num": "#155E75", "bg": "#FFFFFF", "icon": "💡"},
             ]
-            for title, val in sample_cards:
+            sample_cards = [
+                ("总体检人次", "1,580 人"),
+                ("体检实收总额", "¥ 328,600.00"),
+                ("平均客单价", "¥ 207.97"),
+                ("综合完成率", "96.8%")
+            ]
+            for idx, (title, val) in enumerate(sample_cards):
+                theme = palette[idx % len(palette)]
                 c_box = QFrame()
-                c_box.setStyleSheet("background: #FFFFFF; border: 1px solid #CBD5E1; border-top: 3px solid #2563EB; border-radius: 6px; padding: 4px;")
+                c_box.setMinimumWidth(150)
+                c_box.setMaximumWidth(280)
+                c_box.setStyleSheet(
+                    "QFrame {"
+                    "  background: " + theme['bg'] + ";"
+                    "  border: 1px solid #E2E8F0;"
+                    "  border-top: 3px solid " + theme['top'] + ";"
+                    "  border-radius: 8px;"
+                    "}"
+                    "QFrame:hover {"
+                    "  border-color: #CBD5E1;"
+                    "  border-top: 3px solid " + theme['top'] + ";"
+                    "  background: #FFFFFF;"
+                    "}"
+                )
                 c_lay = QVBoxLayout(c_box)
-                c_lay.setContentsMargins(14, 8, 14, 8)
-                c_lay.setSpacing(4)
+                c_lay.setContentsMargins(14, 10, 14, 10)
+                c_lay.setSpacing(6)
+
+                t_row = QHBoxLayout()
+                t_row.setSpacing(6)
+                icn_lbl = QLabel(theme['icon'])
+                icn_lbl.setStyleSheet("font-size: 11px;")
                 t = QLabel(title)
-                t.setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold;")
+                t.setStyleSheet("color: #64748B; font-size: 12px; font-weight: bold;")
+                t_row.addWidget(icn_lbl)
+                t_row.addWidget(t)
+                t_row.addStretch()
+
                 v = QLabel(val)
-                v.setStyleSheet("color: #1E3A8A; font-size: 20px; font-weight: bold;")
-                c_lay.addWidget(t)
+                v.setStyleSheet("color: " + theme['num'] + "; font-size: 22px; font-weight: bold; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;")
+                c_lay.addLayout(t_row)
                 c_lay.addWidget(v)
                 cards_flow.addWidget(c_box)
 

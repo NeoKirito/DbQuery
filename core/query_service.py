@@ -136,53 +136,95 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
 
     hdr_fill  = PatternFill("solid", fgColor="1A6EB5")
     hdr_font  = Font(color="FFFFFF", bold=True, name="微软雅黑", size=10)
-    even_fill = PatternFill("solid", fgColor="EEF4FC")
-    thin      = Side(style='thin', color='BBBBBB')
-    border    = Border(left=thin, right=thin, top=thin, bottom=thin)
-    center    = Alignment(horizontal='center', vertical='center')
-    vcenter   = Alignment(vertical='center')
+    even_fill = PatternFill("solid", fgColor="F8FAFC")
+    thin_border = Side(style='thin', color='CBD5E1')
+    table_border = Border(left=thin_border, right=thin_border, top=thin_border, bottom=thin_border)
+    sum_top_border = Side(style='thin', color='94A3B8')
+    sum_bot_border = Side(style='double', color='1A6EB5')
+    sum_border = Border(left=thin_border, right=thin_border, top=sum_top_border, bottom=sum_bot_border)
+
+    center      = Alignment(horizontal='center', vertical='center')
+    align_left  = Alignment(horizontal='left', vertical='center')
+    align_right = Alignment(horizontal='right', vertical='center')
 
     def _write_table_sheet(target_ws, t_cols, t_rows, t_summary):
+        try:
+            target_ws.views.sheetView[0].showGridLines = True
+        except Exception:
+            pass
+
+        target_ws.row_dimensions[1].height = 26
+
+        # 智能判定各列的数据对齐方式（数值右对齐，日期居中，文本左对齐）
+        col_alignments = []
+        for ci in range(len(t_cols)):
+            is_num = True
+            is_date = True
+            has_data = False
+            for r in t_rows[:15]:
+                if ci < len(r) and r[ci] is not None and r[ci] != '':
+                    has_data = True
+                    val = r[ci]
+                    if not isinstance(val, (int, float)):
+                        try:
+                            float(str(val).replace(',', ''))
+                        except ValueError:
+                            is_num = False
+                    if not isinstance(val, (datetime.datetime, datetime.date)):
+                        is_date = False
+            if has_data and is_num:
+                col_alignments.append(align_right)
+            elif has_data and is_date:
+                col_alignments.append(center)
+            else:
+                col_alignments.append(align_left)
+
         # 表头
         for ci, col_name in enumerate(t_cols, 1):
             cell = target_ws.cell(row=1, column=ci, value=col_name)
             cell.fill      = hdr_fill
             cell.font      = hdr_font
-            cell.border    = border
+            cell.border    = table_border
             cell.alignment = center
 
         # 数据行
         for ri, row in enumerate(t_rows, 2):
+            target_ws.row_dimensions[ri].height = 20
             for ci, val in enumerate(row, 1):
                 cell = target_ws.cell(row=ri, column=ci, value=val)
-                cell.border    = border
-                cell.alignment = vcenter
+                cell.border    = table_border
+                cell.alignment = col_alignments[ci - 1] if ci - 1 < len(col_alignments) else align_left
                 if ri % 2 == 0:
                     cell.fill = even_fill
 
-        # 合计行
+        # 合计行（财务双底线专业样式）
         if t_summary and len(t_summary) == len(t_cols):
             s_ri = len(t_rows) + 2
-            sum_fill = PatternFill("solid", fgColor="E6F2FF")
+            target_ws.row_dimensions[s_ri].height = 24
+            sum_fill = PatternFill("solid", fgColor="EBF3FC")
             sum_font = Font(color="1A6EB5", bold=True, name="微软雅黑", size=10)
             for ci, val in enumerate(t_summary, 1):
                 cell = target_ws.cell(row=s_ri, column=ci, value=val)
-                cell.border    = border
-                cell.alignment = vcenter
+                cell.border    = sum_border
                 cell.fill      = sum_fill
                 cell.font      = sum_font
+                if ci == 1:
+                    cell.alignment = center
+                else:
+                    cell.alignment = col_alignments[ci - 1] if ci - 1 < len(col_alignments) else align_right
 
-        # 自适应列宽（采样前 100 行）
+        # 自适应列宽（考虑中文字符宽度）
         for col_idx in range(1, len(t_cols) + 1):
             col_letter = get_column_letter(col_idx)
             max_len = 0
             for row_idx in range(1, min(len(t_rows) + 2, 102)):
                 cell = target_ws.cell(row=row_idx, column=col_idx)
                 if cell.value is not None:
-                    cell_len = len(str(cell.value))
-                    if cell_len > max_len:
-                        max_len = cell_len
-            target_ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 45)
+                    s = str(cell.value)
+                    w = sum(2 if ord(c) > 127 else 1 for c in s)
+                    if w > max_len:
+                        max_len = w
+            target_ws.column_dimensions[col_letter].width = min(max(max_len + 3, 11), 48)
 
         target_ws.freeze_panes = 'A2'
 
@@ -199,53 +241,96 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
             target_ws.views.sheetView[0].showGridLines = True
         except Exception:
             pass
+
+        # 1. 顶部大标题横幅
         banner_fill = PatternFill("solid", fgColor="1A6EB5")
         banner_font = Font(color="FFFFFF", bold=True, name="微软雅黑", size=13)
-        target_ws.merge_cells("A1:D1")
-        top_cell = target_ws.cell(row=1, column=1, value=u"📊 " + sheet_title)
+        target_ws.merge_cells("A1:H1")
+        top_cell = target_ws.cell(row=1, column=1, value=u"📊 " + sheet_title + u" - 核心指标看板")
         top_cell.fill = banner_fill
         top_cell.font = banner_font
         top_cell.alignment = Alignment(horizontal='center', vertical='center')
         target_ws.row_dimensions[1].height = 36
 
-        # Headers: 序号, 指标名称, 统计数值, 原始值
-        hdr_fill = PatternFill("solid", fgColor="E6F2FF")
-        hdr_font = Font(color="1A6EB5", bold=True, name="微软雅黑", size=10)
-        target_ws.cell(row=3, column=1, value=u"序号").fill = hdr_fill
-        target_ws.cell(row=3, column=2, value=u"指标名称").fill = hdr_fill
-        target_ws.cell(row=3, column=3, value=u"统计数值 (格式化)").fill = hdr_fill
-        target_ws.cell(row=3, column=4, value=u"原始数值").fill = hdr_fill
-        for ci in range(1, 5):
-            c = target_ws.cell(row=3, column=ci)
-            c.font = hdr_font
-            c.border = border
-            c.alignment = center
-        target_ws.row_dimensions[3].height = 24
+        # 2. 像页面一样渲染【并排大字 KPI 视觉卡片】！
+        card_colors = [
+            {"top": "2563EB", "val": "1E3A8A", "bg": "F8FAFC", "icon": "📊"},
+            {"top": "059669", "val": "065F46", "bg": "F8FAFC", "icon": "📈"},
+            {"top": "D97706", "val": "92400E", "bg": "F8FAFC", "icon": "🎯"},
+            {"top": "7C3AED", "val": "5B21B6", "bg": "F8FAFC", "icon": "💎"},
+            {"top": "0891B2", "val": "155E75", "bg": "F8FAFC", "icon": "💡"},
+        ]
 
-        val_font = Font(color="0F172A", bold=True, name="微软雅黑", size=11)
+        # 每 4 个卡片一行，每个卡片占 2 列
+        for idx, card in enumerate(cards_list):
+            theme = card_colors[idx % len(card_colors)]
+            c_col = (idx % 4) * 2 + 1  # 1, 3, 5, 7
+            c_row = 3 + (idx // 4) * 3 # 3, 6, ...
+
+            col_a = get_column_letter(c_col)
+            col_b = get_column_letter(c_col + 1)
+
+            # 卡片标题行 (c_row)
+            target_ws.merge_cells("{}{}:{}{}".format(col_a, c_row, col_b, c_row))
+            t_cell = target_ws.cell(row=c_row, column=c_col, value=u"{} {}".format(theme['icon'], card.get('title', '')))
+            t_cell.fill = PatternFill("solid", fgColor=theme['bg'])
+            t_cell.font = Font(color="64748B", bold=True, name="微软雅黑", size=10)
+            t_cell.alignment = Alignment(horizontal='center', vertical='center')
+            t_side_top = Side(style='medium', color=theme['top'])
+            t_side_thin = Side(style='thin', color='CBD5E1')
+            for col_i in (c_col, c_col + 1):
+                target_ws.cell(row=c_row, column=col_i).border = Border(top=t_side_top, left=t_side_thin, right=t_side_thin)
+            target_ws.row_dimensions[c_row].height = 22
+
+            # 卡片数值行 (c_row + 1)
+            target_ws.merge_cells("{}{}:{}{}".format(col_a, c_row + 1, col_b, c_row + 1))
+            v_cell = target_ws.cell(row=c_row + 1, column=c_col, value=card.get('formatted', ''))
+            v_cell.fill = PatternFill("solid", fgColor="FFFFFF")
+            v_cell.font = Font(color=theme['val'], bold=True, name="微软雅黑", size=16)
+            v_cell.alignment = Alignment(horizontal='center', vertical='center')
+            for col_i in (c_col, c_col + 1):
+                target_ws.cell(row=c_row + 1, column=col_i).border = Border(bottom=t_side_thin, left=t_side_thin, right=t_side_thin)
+            target_ws.row_dimensions[c_row + 1].height = 32
+
+        # 3. 在卡片下方附上详细指标数据清单
+        cards_rows_start = 3 + ((len(cards_list) - 1) // 4 + 1) * 3 + 1
+        sub_title = target_ws.cell(row=cards_rows_start - 1, column=1, value=u"📋 指标数据明细对照表")
+        sub_title.font = Font(color="1E293B", bold=True, name="微软雅黑", size=11)
+
+        t_hdr_fill = PatternFill("solid", fgColor="E6F2FF")
+        t_hdr_font = Font(color="1A6EB5", bold=True, name="微软雅黑", size=10)
+        headers = [u"序号", u"指标名称", u"统计数值 (显示格式)", u"原始数值"]
+        target_ws.row_dimensions[cards_rows_start].height = 24
+        for ci, h_name in enumerate(headers, 1):
+            c = target_ws.cell(row=cards_rows_start, column=ci, value=h_name)
+            c.fill = t_hdr_fill
+            c.font = t_hdr_font
+            c.border = table_border
+            c.alignment = center
+
+        val_font = Font(color="0F172A", bold=True, name="微软雅黑", size=10.5)
         for idx, card in enumerate(cards_list, 1):
-            ri = 3 + idx
-            target_ws.row_dimensions[ri].height = 26
+            ri = cards_rows_start + idx
+            target_ws.row_dimensions[ri].height = 22
             c1 = target_ws.cell(row=ri, column=1, value=idx)
             c2 = target_ws.cell(row=ri, column=2, value=card.get('title', ''))
             c3 = target_ws.cell(row=ri, column=3, value=card.get('formatted', ''))
             c4 = target_ws.cell(row=ri, column=4, value=card.get('raw', ''))
             for c in (c1, c2, c3, c4):
-                c.border = border
-                c.alignment = vcenter
+                c.border = table_border
+                c.alignment = align_left
             c1.alignment = center
             c3.font = val_font
-            c3.alignment = Alignment(horizontal='right', vertical='center')
+            c3.alignment = align_right
+            c4.alignment = align_right
             if ri % 2 == 0:
-                c1.fill = even_fill
-                c2.fill = even_fill
-                c3.fill = even_fill
-                c4.fill = even_fill
+                for c in (c1, c2, c3, c4):
+                    c.fill = even_fill
 
-        target_ws.column_dimensions['A'].width = 8
-        target_ws.column_dimensions['B'].width = 24
-        target_ws.column_dimensions['C'].width = 24
-        target_ws.column_dimensions['D'].width = 18
+        # 设置列宽
+        for col_idx in range(1, 9):
+            col_letter = get_column_letter(col_idx)
+            target_ws.column_dimensions[col_letter].width = 16
 
     _write_table_sheet(ws, columns, rows, summary_row)
 

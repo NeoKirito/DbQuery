@@ -483,11 +483,35 @@ class QueryTab(QWidget):
         # 多区块表格切换栏
         self.block_tabs = QTabBar()
         self.block_tabs.setDrawBase(False)
-        self.block_tabs.setStyleSheet(
-            "QTabBar::tab { background: #E2E8F0; color: #475569; padding: 6px 14px; margin-right: 4px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: 12px; }"
-            "QTabBar::tab:selected { background: #1A6EB5; color: #FFFFFF; font-weight: bold; }"
-            "QTabBar::tab:hover:!selected { background: #CBD5E1; color: #1E293B; }"
-        )
+        self.block_tabs.setStyleSheet("""
+            QTabBar {
+                background: transparent;
+                border: none;
+            }
+            QTabBar::tab {
+                background: #EDF2F7;
+                color: #4A5568;
+                padding: 6px 16px;
+                margin-right: 4px;
+                border: 1px solid #CBD5E0;
+                border-bottom: none;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                font-size: 12px;
+                min-width: 90px;
+            }
+            QTabBar::tab:selected {
+                background: #FFFFFF;
+                color: #2B6CB0;
+                border-color: #BEE3F8;
+                border-top: 2px solid #3182CE;
+                font-weight: bold;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #E2E8F0;
+                color: #2D3748;
+            }
+        """)
         self.block_tabs.currentChanged.connect(self._on_block_tab_changed)
         self.block_tabs.hide()
         root.addWidget(self.block_tabs)
@@ -836,21 +860,50 @@ class QueryTab(QWidget):
                 w.deleteLater()
 
         if cards_found:
-            for card in cards_found:
+            # 丰富优雅的多彩商务主题配色
+            palette = [
+                {"top": "#2563EB", "num": "#1E3A8A", "bg": "#FFFFFF", "icon": "📊"},
+                {"top": "#059669", "num": "#065F46", "bg": "#FFFFFF", "icon": "📈"},
+                {"top": "#D97706", "num": "#92400E", "bg": "#FFFFFF", "icon": "🎯"},
+                {"top": "#7C3AED", "num": "#5B21B6", "bg": "#FFFFFF", "icon": "💎"},
+                {"top": "#0891B2", "num": "#155E75", "bg": "#FFFFFF", "icon": "💡"},
+            ]
+            for idx, card in enumerate(cards_found):
+                theme = palette[idx % len(palette)]
                 card_box = QFrame()
+                card_box.setMinimumWidth(150)
+                card_box.setMaximumWidth(280)
                 card_box.setStyleSheet(
-                    "QFrame { background: #FFFFFF; border: 1px solid #CBD5E1; border-top: 3px solid #2563EB; border-radius: 6px; padding: 2px; }"
+                    "QFrame {"
+                    "  background: " + theme['bg'] + ";"
+                    "  border: 1px solid #E2E8F0;"
+                    "  border-top: 3px solid " + theme['top'] + ";"
+                    "  border-radius: 8px;"
+                    "}"
+                    "QFrame:hover {"
+                    "  border-color: #CBD5E1;"
+                    "  border-top: 3px solid " + theme['top'] + ";"
+                    "  background: #FFFFFF;"
+                    "}"
                 )
                 c_layout = QVBoxLayout(card_box)
                 c_layout.setContentsMargins(14, 10, 14, 10)
-                c_layout.setSpacing(4)
+                c_layout.setSpacing(6)
 
+                t_row = QHBoxLayout()
+                t_row.setSpacing(6)
+                icn_lbl = QLabel(theme['icon'])
+                icn_lbl.setStyleSheet("font-size: 11px;")
                 t_lbl = QLabel(card['title'])
-                t_lbl.setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold;")
-                v_lbl = QLabel(card['formatted'])
-                v_lbl.setStyleSheet("color: #1E3A8A; font-size: 20px; font-weight: bold;")
+                t_lbl.setStyleSheet("color: #64748B; font-size: 12px; font-weight: bold;")
+                t_row.addWidget(icn_lbl)
+                t_row.addWidget(t_lbl)
+                t_row.addStretch()
 
-                c_layout.addWidget(t_lbl)
+                v_lbl = QLabel(card['formatted'])
+                v_lbl.setStyleSheet("color: " + theme['num'] + "; font-size: 22px; font-weight: bold; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;")
+
+                c_layout.addLayout(t_row)
                 c_layout.addWidget(v_lbl)
                 self.cards_layout.addWidget(card_box)
             self.cards_layout.addStretch()
@@ -866,10 +919,12 @@ class QueryTab(QWidget):
                 self._table_blocks.append((b, b_data))
 
         self.block_tabs.blockSignals(True)
-        self.block_tabs.clear()
+        # QTabBar 没有 clear() 方法，使用循环 removeTab 清理
+        while self.block_tabs.count() > 0:
+            self.block_tabs.removeTab(0)
         if len(self._table_blocks) > 1:
             for b, b_data in self._table_blocks:
-                tab_title = u"{} ({})".format(b.title or b.id, len(b_data.get('rows', [])))
+                tab_title = u"📋 {} ({})".format(b.title or b.id, len(b_data.get('rows', [])))
                 self.block_tabs.addTab(tab_title)
             self.block_tabs.setCurrentIndex(0)
             self.block_tabs.show()
@@ -893,10 +948,16 @@ class QueryTab(QWidget):
         if not hasattr(self, '_table_blocks') or index < 0 or index >= len(self._table_blocks):
             return
         b, b_data = self._table_blocks[index]
-        b_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
-        self._on_query_done(b_data['columns'], b_data['rows'], summary_spec=b_spec)
 
-    def _on_query_done(self, columns, rows, summary_spec=None):
+        # 切换表格前，清空文本过滤输入框
+        self.filter_edit.blockSignals(True)
+        self.filter_edit.clear()
+        self.filter_edit.blockSignals(False)
+
+        b_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
+        self._on_query_done(b_data['columns'], b_data['rows'], summary_spec=b_spec, current_block_title=b.title or b.id)
+
+    def _on_query_done(self, columns, rows, summary_spec=None, current_block_title=None):
         logger.info("_on_query_done called, columns=%s, rows=%d", columns, len(rows))
         self._cancel_worker()
 
@@ -944,9 +1005,10 @@ class QueryTab(QWidget):
             self.col_combo.blockSignals(False)
             self.filter_edit.clear()
 
+            block_info = u"  |  当前显示: {}".format(current_block_title) if current_block_title else ""
             self.status_lbl.setText(
-                u"共 {} 行，{} 列  |  耗时 {:.2f}s".format(
-                    len(rows), len(columns), self._elapsed
+                u"共 {} 行，{} 列{}  |  耗时 {:.2f}s".format(
+                    len(rows), len(columns), block_info, self._elapsed
                 )
             )
             logger.info("_on_query_done completed successfully")
