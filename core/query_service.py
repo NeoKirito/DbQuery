@@ -24,7 +24,7 @@ def escape_sql_param(value):
     return value.replace("'", "''")
 
 
-def build_final_sql(form, param_values, options_by_name=None, already_normalized=False):
+def build_final_sql(form, param_values, options_by_name=None, already_normalized=False, sql_template=None):
     """根据表单定义构建最终 SQL。
 
     只接受 ``form.params`` 中声明的参数名；未知客户端字段不会参与替换。动态
@@ -34,7 +34,7 @@ def build_final_sql(form, param_values, options_by_name=None, already_normalized
     normalized = param_values if already_normalized else normalize_params(
         form, param_values, options_by_name=options_by_name
     )
-    return build_sql_with_params(form, normalized)
+    return build_sql_with_params(form, normalized, sql_template=sql_template)
 
 
 # ════════════════════════════════════════
@@ -105,7 +105,7 @@ class ResultData:
 # ════════════════════════════════════════
 
 def export_to_excel(path, columns, rows, form_title='', form_desc='',
-                    elapsed=0.0, params_info=None, final_sql=''):
+                    elapsed=0.0, params_info=None, final_sql='', summary_row=None, blocks=None):
     """
     将查询结果导出为 Excel 文件
     :param path: 保存路径
@@ -116,6 +116,8 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
     :param elapsed: 查询耗时（秒）
     :param params_info: [(label, value), ...] 查询参数信息
     :param final_sql: 最终执行的 SQL
+    :param summary_row: 底部合计行（可选）
+    :param blocks: 多区块数据列表（可选）
     """
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -140,44 +142,74 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
     center    = Alignment(horizontal='center', vertical='center')
     vcenter   = Alignment(vertical='center')
 
-    # 表头
-    for ci, col_name in enumerate(columns, 1):
-        cell = ws.cell(row=1, column=ci, value=col_name)
-        cell.fill      = hdr_fill
-        cell.font      = hdr_font
-        cell.border    = border
-        cell.alignment = center
-
-    # 数据行
-    for ri, row in enumerate(rows, 2):
-        for ci, val in enumerate(row, 1):
-            cell = ws.cell(row=ri, column=ci, value=val)
+    def _write_table_sheet(target_ws, t_cols, t_rows, t_summary):
+        # 表头
+        for ci, col_name in enumerate(t_cols, 1):
+            cell = target_ws.cell(row=1, column=ci, value=col_name)
+            cell.fill      = hdr_fill
+            cell.font      = hdr_font
             cell.border    = border
-            cell.alignment = vcenter
-            if ri % 2 == 0:
-                cell.fill = even_fill
+            cell.alignment = center
 
-    # 自适应列宽（采样前 100 行）
-    for col_idx in range(1, len(columns) + 1):
-        col_letter = get_column_letter(col_idx)
-        max_len = 0
-        for row_idx in range(1, min(len(rows) + 2, 102)):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            if cell.value is not None:
-                cell_len = len(str(cell.value))
-                if cell_len > max_len:
-                    max_len = cell_len
-        ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 45)
+        # 数据行
+        for ri, row in enumerate(t_rows, 2):
+            for ci, val in enumerate(row, 1):
+                cell = target_ws.cell(row=ri, column=ci, value=val)
+                cell.border    = border
+                cell.alignment = vcenter
+                if ri % 2 == 0:
+                    cell.fill = even_fill
 
-    ws.freeze_panes = 'A2'
+        # 合计行
+        if t_summary and len(t_summary) == len(t_cols):
+            s_ri = len(t_rows) + 2
+            sum_fill = PatternFill("solid", fgColor="E6F2FF")
+            sum_font = Font(color="1A6EB5", bold=True, name="微软雅黑", size=10)
+            for ci, val in enumerate(t_summary, 1):
+                cell = target_ws.cell(row=s_ri, column=ci, value=val)
+                cell.border    = border
+                cell.alignment = vcenter
+                cell.fill      = sum_fill
+                cell.font      = sum_font
 
-    # 自动筛选
-    try:
-        last_col_letter = get_column_letter(len(columns))
-        last_row = len(rows) + 1
-        ws.auto_filter.ref = "A1:{}{}".format(last_col_letter, last_row)
-    except Exception:
-        pass
+        # 自适应列宽（采样前 100 行）
+        for col_idx in range(1, len(t_cols) + 1):
+            col_letter = get_column_letter(col_idx)
+            max_len = 0
+            for row_idx in range(1, min(len(t_rows) + 2, 102)):
+                cell = target_ws.cell(row=row_idx, column=col_idx)
+                if cell.value is not None:
+                    cell_len = len(str(cell.value))
+                    if cell_len > max_len:
+                        max_len = cell_len
+            target_ws.column_dimensions[col_letter].width = min(max(max_len + 2, 10), 45)
+
+        target_ws.freeze_panes = 'A2'
+
+        # 自动筛选（仅针对数据行）
+        try:
+            last_col_letter = get_column_letter(len(t_cols))
+            last_row = len(t_rows) + 1
+            target_ws.auto_filter.ref = "A1:{}{}".format(last_col_letter, last_row)
+        except Exception:
+            pass
+
+    _write_table_sheet(ws, columns, rows, summary_row)
+
+    # 若有多表格区块，追加各自的工作表
+    if blocks:
+        existing_titles = {ws.title}
+        for b in blocks:
+            if b.get('type') == 'table' and b.get('columns'):
+                b_title = (b.get('title') or b.get('id') or u'表格').strip()
+                # openpyxl 表名最长 31 字符且不可包含某些特殊字符
+                invalid_chars = set(r'[]:*?/') | {'\\'}
+                safe_title = ''.join(c for c in b_title if c not in invalid_chars)[:30]
+                if safe_title in existing_titles:
+                    continue
+                existing_titles.add(safe_title)
+                b_ws = wb.create_sheet(title=safe_title)
+                _write_table_sheet(b_ws, b['columns'], b.get('rows', []), b.get('summary_row'))
 
     # ── Sheet2: 查询信息 ──
     ws2 = wb.create_sheet(u"查询信息")
@@ -232,8 +264,21 @@ def serialize_form(form, base_dir=None):
         'group_order': getattr(form, 'group_order', None),
         'query_type':  form.query_type,
         'web_enabled': bool(getattr(form, 'web_enabled', False)),
+        'datasource':     getattr(form, 'datasource', 'default'),
+        'summary_footer': getattr(form, 'summary_footer', ''),
+        'blocks': [
+            {
+                'id':             b.id,
+                'title':          b.title,
+                'btype':          b.btype,
+                'datasource':     b.datasource,
+                'width':          b.width,
+                'summary_footer': b.summary_footer,
+                'order':          b.order,
+            }
+            for b in getattr(form, 'blocks', []) or []
+        ],
         'file_path':   fp,
-
         'params': [
             {
                 'name':    p.name,

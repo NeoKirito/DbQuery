@@ -114,8 +114,70 @@ class DBManager:
         with open(CONFIG_PATH, 'w', encoding='utf-8') as config_file:
             self.config.write(config_file)
 
-    def get_db_config(self):
+    def get_db_config(self, datasource='default'):
+        ds = str(datasource or 'default').strip().lower()
+        if ds in ('', 'default', 'main', 'primary'):
+            return dict(self.config['database'])
+        section_name = 'datasource.{}'.format(ds)
+        if self.config.has_section(section_name):
+            cfg = dict(self.config[section_name])
+            if not cfg.get('driver'):
+                cfg['driver'] = self.config['database'].get('driver', '') or DBManager.get_best_driver()
+            if not cfg.get('port'):
+                cfg['port'] = '1433'
+            return cfg
+        logger.warning("Datasource '%s' not found, falling back to default database", ds)
         return dict(self.config['database'])
+
+    def get_datasources(self):
+        """返回所有配置的数据源信息字典。"""
+        datasources = {}
+        db = self.config['database']
+        datasources['default'] = {
+            'id': 'default',
+            'name': db.get('name', u'默认主库'),
+            'server': db.get('server', 'localhost'),
+            'port': db.get('port', '1433'),
+            'database': db.get('database', 'master'),
+            'driver': db.get('driver', '') or DBManager.get_best_driver(),
+            'trusted_connection': db.get('trusted_connection', 'no'),
+            'username': db.get('username', ''),
+            'is_default': True
+        }
+        for section in self.config.sections():
+            if section.lower().startswith('datasource.'):
+                ds_id = section.split('.', 1)[1].strip().lower()
+                sec = self.config[section]
+                datasources[ds_id] = {
+                    'id': ds_id,
+                    'name': sec.get('name', ds_id),
+                    'server': sec.get('server', 'localhost'),
+                    'port': sec.get('port', '1433'),
+                    'database': sec.get('database', 'master'),
+                    'driver': sec.get('driver', '') or DBManager.get_best_driver(),
+                    'trusted_connection': sec.get('trusted_connection', 'no'),
+                    'username': sec.get('username', ''),
+                    'is_default': False
+                }
+        return datasources
+
+    def set_datasource_config(self, ds_id, cfg_dict):
+        """保存命名数据源配置。"""
+        ds = str(ds_id or '').strip().lower()
+        if not ds or ds in ('default', 'main', 'database'):
+            self.set_db_config(cfg_dict)
+            return
+        sec_name = 'datasource.{}'.format(ds)
+        self.config[sec_name] = cfg_dict
+        self.save_config()
+
+    def remove_datasource(self, ds_id):
+        """删除命名数据源配置。"""
+        ds = str(ds_id or '').strip().lower()
+        sec_name = 'datasource.{}'.format(ds)
+        if self.config.has_section(sec_name):
+            self.config.remove_section(sec_name)
+            self.save_config()
 
     def get_web_config(self):
         """返回 Web 查询配置；旧配置文件缺少 [web] 时使用安全默认值。"""
@@ -241,13 +303,13 @@ class DBManager:
         self.save_config()
         self.connection = None
 
-    def _build_conn_str(self):
-        db = self.config['database']
+    def _build_conn_str(self, datasource='default'):
+        db = self.get_db_config(datasource)
         driver = db.get('driver', '') or DBManager.get_best_driver()
         server = db.get('server', 'localhost')
-        port = db.get('port', '1433').strip()
+        port = str(db.get('port', '1433')).strip()
         database = db.get('database', 'master')
-        trusted = db.get('trusted_connection', 'no').lower() in ('yes', '1', 'true')
+        trusted = str(db.get('trusted_connection', 'no')).lower() in ('yes', '1', 'true')
         server_str = '{},{}'.format(server, port) if port and port != '1433' else server
         if trusted:
             return (
@@ -261,16 +323,26 @@ class DBManager:
             .format(driver, server_str, database, username, password)
         )
 
-    def _open_connection(self, connect_timeout=15):
+    def _open_connection(self, connect_timeout=15, datasource='default'):
         """创建一条独立连接；调用者必须负责关闭。"""
         return pyodbc.connect(
-            self._build_conn_str(),
+            self._build_conn_str(datasource=datasource),
             timeout=self._positive_int(connect_timeout, 15, maximum=120)
         )
 
-    def test_connection(self):
+    def _call_open_connection(self, datasource='default', connect_timeout=15):
+        """调用 _open_connection 并兼容外部将其实例方法 mock 为无参 lambda 的情况。"""
         try:
-            conn = self._open_connection(connect_timeout=10)
+            return self._open_connection(connect_timeout=connect_timeout, datasource=datasource)
+        except TypeError:
+            try:
+                return self._open_connection(connect_timeout=connect_timeout)
+            except TypeError:
+                return self._open_connection()
+
+    def test_connection(self, datasource='default'):
+        try:
+            conn = self._call_open_connection(connect_timeout=10, datasource=datasource)
             conn.close()
             return True, '连接成功'
         except Exception as exc:
@@ -366,7 +438,8 @@ class DBManager:
         finally:
             self._close_quietly(cursor)
 
-    def execute_query_limited(self, sql, query_timeout=None, max_rows=None, query_type='select'):
+    def execute_query_limited(self, sql, query_timeout=None, max_rows=None,
+                              query_type='select', datasource='default'):
         """执行受 Web 限制保护的查询，最多读取 max_rows + 1 行。
 
         ``pyodbc.connect(timeout=...)`` 只用于登录/连接超时；实际 SQL 执行超时必须在
@@ -384,7 +457,7 @@ class DBManager:
         for attempt in range(2):
             conn = None
             try:
-                conn = self._open_connection()
+                conn = self._call_open_connection(datasource=datasource)
                 # pyodbc 4.x 的真实查询超时属性属于 Connection，而非 Cursor。
                 # 必须在创建 cursor 之前赋值，连接/login timeout 仍由 _open_connection 区分处理。
                 conn.timeout = query_timeout
@@ -423,7 +496,7 @@ class DBManager:
         finally:
             self._close_quietly(cursor)
 
-    def execute_query(self, sql, query_type='select'):
+    def execute_query(self, sql, query_type='select', datasource='default'):
         """桌面兼容接口，不套用 Web 行数上限。
 
         与 Web 的安全原则保持一致：仅 SELECT 在明确的瞬态连接错误时使用新连接
@@ -435,7 +508,7 @@ class DBManager:
         for attempt in range(2):
             conn = None
             try:
-                conn = self._open_connection()
+                conn = self._call_open_connection(datasource=datasource)
                 return self._run_unlimited_query(conn, sql)
             except pyodbc.Error as exc:
                 last_error = exc

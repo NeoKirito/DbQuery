@@ -5,7 +5,7 @@
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGroupBox,
     QLineEdit, QComboBox, QCheckBox, QPushButton, QLabel, QMessageBox,
-    QApplication
+    QApplication, QInputDialog
 )
 from PyQt5.QtCore import Qt
 from urllib.parse import urlparse
@@ -16,14 +16,37 @@ class ConfigDialog(QDialog):
         super(ConfigDialog, self).__init__(parent)
         self.db_manager = db_manager
         self.setWindowTitle("数据库连接配置")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(500)
         self.setModal(True)
+        self._current_ds = 'default'
+        self._datasources = {}
+        self._deleted_ds = set()
+        self._is_switching_ds = False
         self._setup_ui()
         self._load_current()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
+
+        # 数据源选择行
+        ds_row = QHBoxLayout()
+        ds_row.addWidget(QLabel("数据源:"))
+        self.ds_combo = QComboBox()
+        self.ds_combo.setMinimumWidth(180)
+        self.ds_combo.currentIndexChanged.connect(self._on_datasource_changed)
+
+        self.add_ds_btn = QPushButton("新建...")
+        self.add_ds_btn.clicked.connect(self._add_datasource)
+
+        self.del_ds_btn = QPushButton("删除")
+        self.del_ds_btn.clicked.connect(self._delete_datasource)
+
+        ds_row.addWidget(self.ds_combo)
+        ds_row.addWidget(self.add_ds_btn)
+        ds_row.addWidget(self.del_ds_btn)
+        ds_row.addStretch()
+        layout.addLayout(ds_row)
 
         grp = QGroupBox("SQL Server 连接参数")
         form = QFormLayout(grp)
@@ -128,23 +151,17 @@ class ConfigDialog(QDialog):
             w.setEnabled(not trusted)
 
     def _load_current(self):
-        cfg = self.db_manager.get_db_config()
-        self.server_edit.setText(cfg.get('server', ''))
-        self.port_edit.setText(cfg.get('port', '1433'))
-        self.db_edit.setText(cfg.get('database', ''))
+        if hasattr(self.db_manager, 'get_datasources'):
+            raw_datasources = self.db_manager.get_datasources()
+            self._datasources = {k: dict(v) for k, v in raw_datasources.items()}
+        else:
+            self._datasources = {'default': dict(self.db_manager.get_db_config())}
 
-        driver = cfg.get('driver', '')
-        idx = self.driver_combo.findText(driver)
-        if idx >= 0:
-            self.driver_combo.setCurrentIndex(idx)
-        elif driver:
-            self.driver_combo.setCurrentText(driver)
+        if 'default' not in self._datasources:
+            self._datasources['default'] = dict(self.db_manager.get_db_config())
 
-        trusted = cfg.get('trusted_connection', 'no').lower() in ('yes', '1', 'true')
-        self.trusted_check.setChecked(trusted)
-        self.user_edit.setText(cfg.get('username', ''))
-        self.pass_edit.setText(cfg.get('password', ''))
-        self._toggle_auth(Qt.Checked if trusted else Qt.Unchecked)
+        self._populate_ds_combo('default')
+        self._load_datasource_into_form('default')
 
         self._integration_cfg = self.db_manager.get_integration_config()
         self.frontend_embed_enabled_check.setChecked(
@@ -161,6 +178,109 @@ class ConfigDialog(QDialog):
             self.frontend_address_edit.setText(
                 self._display_frontend_address(origins[0]) if origins else ''
             )
+
+    def _populate_ds_combo(self, select_id='default'):
+        self._is_switching_ds = True
+        self.ds_combo.clear()
+        self.ds_combo.addItem("默认主库 (default)", "default")
+        for ds_id in sorted(self._datasources.keys()):
+            if ds_id == 'default':
+                continue
+            name = self._datasources[ds_id].get('name') or ds_id
+            label = "{} [{}]".format(name, ds_id) if name != ds_id else ds_id
+            self.ds_combo.addItem(label, ds_id)
+
+        target_index = 0
+        for i in range(self.ds_combo.count()):
+            if self.ds_combo.itemData(i) == select_id:
+                target_index = i
+                break
+        self.ds_combo.setCurrentIndex(target_index)
+        self._is_switching_ds = False
+
+    def _on_datasource_changed(self, index):
+        if self._is_switching_ds or index < 0:
+            return
+        new_ds = self.ds_combo.itemData(index)
+        if not new_ds or new_ds == self._current_ds:
+            return
+        # 保存当前正在编辑的数据源表单内容
+        self._datasources[self._current_ds] = self._build_config_dict()
+        self._current_ds = new_ds
+        self._load_datasource_into_form(new_ds)
+
+    def _load_datasource_into_form(self, ds_id):
+        cfg = self._datasources.get(ds_id, {})
+        self.server_edit.setText(cfg.get('server', ''))
+        self.port_edit.setText(str(cfg.get('port', '1433') or '1433'))
+        self.db_edit.setText(cfg.get('database', ''))
+
+        driver = cfg.get('driver', '')
+        idx = self.driver_combo.findText(driver)
+        if idx >= 0:
+            self.driver_combo.setCurrentIndex(idx)
+        elif driver:
+            self.driver_combo.setCurrentText(driver)
+
+        trusted = str(cfg.get('trusted_connection', 'no')).lower() in ('yes', '1', 'true')
+        self.trusted_check.setChecked(trusted)
+        self.user_edit.setText(cfg.get('username', ''))
+        self.pass_edit.setText(cfg.get('password', ''))
+        self._toggle_auth(Qt.Checked if trusted else Qt.Unchecked)
+
+        self.del_ds_btn.setEnabled(ds_id != 'default')
+
+    def _add_datasource(self):
+        name, ok = QInputDialog.getText(
+            self, "新建数据源", "请输入新数据源标识（英文字母、数字或下划线，例如 lis, his）："
+        )
+        if not ok or not name:
+            return
+        ds_id = str(name).strip().lower()
+        if not ds_id or ds_id in ('default', 'main', 'database'):
+            QMessageBox.warning(self, "提示", "数据源标识无效或已被保留。")
+            return
+        if ds_id in self._datasources and ds_id not in self._deleted_ds:
+            QMessageBox.warning(self, "提示", "数据源 '{}' 已存在。".format(ds_id))
+            return
+        if ds_id in self._deleted_ds:
+            self._deleted_ds.remove(ds_id)
+
+        # 保存当前数据源表单
+        self._datasources[self._current_ds] = self._build_config_dict()
+        # 初始化新数据源
+        self._datasources[ds_id] = {
+            'id': ds_id,
+            'name': ds_id,
+            'server': '',
+            'port': '1433',
+            'database': '',
+            'driver': self.driver_combo.currentText().strip(),
+            'trusted_connection': 'no',
+            'username': '',
+            'password': '',
+        }
+        self._current_ds = ds_id
+        self._populate_ds_combo(select_id=ds_id)
+        self._load_datasource_into_form(ds_id)
+
+    def _delete_datasource(self):
+        if self._current_ds == 'default':
+            return
+        ret = QMessageBox.question(
+            self, "确认删除",
+            "确定要删除数据源 '{}' 吗？".format(self._current_ds),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if ret != QMessageBox.Yes:
+            return
+        del_target = self._current_ds
+        self._deleted_ds.add(del_target)
+        if del_target in self._datasources:
+            del self._datasources[del_target]
+        self._current_ds = 'default'
+        self._populate_ds_combo(select_id='default')
+        self._load_datasource_into_form('default')
 
     @staticmethod
     def _display_frontend_address(origin):
@@ -218,40 +338,70 @@ class ConfigDialog(QDialog):
 
     def _test(self):
         cfg = self._build_config_dict()
-        self.db_manager.set_db_config(cfg)
+        self._datasources[self._current_ds] = cfg
+        if self._current_ds == 'default':
+            self.db_manager.set_db_config(cfg)
+        else:
+            if hasattr(self.db_manager, 'set_datasource_config'):
+                self.db_manager.set_datasource_config(self._current_ds, cfg)
 
         self.test_btn.setEnabled(False)
         self.test_btn.setText("连接中...")
         QApplication.processEvents()
 
-        success, msg = self.db_manager.test_connection()
+        try:
+            if hasattr(self.db_manager, 'test_connection'):
+                try:
+                    success, msg = self.db_manager.test_connection(datasource=self._current_ds)
+                except TypeError:
+                    success, msg = self.db_manager.test_connection()
+            else:
+                success, msg = True, 'OK'
+        except Exception as exc:
+            success, msg = False, str(exc)
+        finally:
+            self.test_btn.setEnabled(True)
+            self.test_btn.setText("测试连接")
 
-        self.test_btn.setEnabled(True)
-        self.test_btn.setText("测试连接")
-
+        ds_desc = "默认主库" if self._current_ds == 'default' else "数据源 '{}'".format(self._current_ds)
         if success:
-            QMessageBox.information(self, "连接测试", "连接成功！")
+            QMessageBox.information(self, "连接测试", "{}连接成功！".format(ds_desc))
         else:
             QMessageBox.warning(self, "连接测试",
-                                "连接失败：\n\n{}".format(msg))
+                                "{}连接失败：\n\n{}".format(ds_desc, msg))
 
     def _save(self):
-        cfg = self._build_config_dict()
-        if not cfg['server']:
-            QMessageBox.warning(self, "提示", "请填写服务器地址")
+        self._datasources[self._current_ds] = self._build_config_dict()
+        default_cfg = self._datasources.get('default', {})
+        if not default_cfg.get('server'):
+            QMessageBox.warning(self, "提示", "请填写默认主库的服务器地址")
             return
-        if not cfg['database']:
-            QMessageBox.warning(self, "提示", "请填写数据库名称")
+        if not default_cfg.get('database'):
+            QMessageBox.warning(self, "提示", "请填写默认主库的数据库名称")
             return
         integration_cfg = self._build_integration_config()
-        if integration_cfg['frontend_embed_enabled']:
-            if not integration_cfg['frontend_embed_allowed_origins']:
+        if integration_cfg.get('frontend_embed_enabled'):
+            if not integration_cfg.get('frontend_embed_allowed_origins'):
                 QMessageBox.warning(
                     self, "提示",
                     "请填写有效的前端 IP 和端口，例如 192.168.0.39:8080 或 *"
                 )
                 return
-        self.db_manager.set_db_config(cfg)
+
+        # 保存默认主库
+        self.db_manager.set_db_config(default_cfg)
+
+        # 保存命名数据源
+        if hasattr(self.db_manager, 'set_datasource_config'):
+            for ds_id, cfg in self._datasources.items():
+                if ds_id == 'default':
+                    continue
+                self.db_manager.set_datasource_config(ds_id, cfg)
+
+        # 删除已标记移除的数据源
+        if hasattr(self.db_manager, 'remove_datasource'):
+            for ds_id in self._deleted_ds:
+                self.db_manager.remove_datasource(ds_id)
 
         self.db_manager.set_integration_config(integration_cfg)
         self.accept()

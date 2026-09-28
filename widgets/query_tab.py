@@ -17,13 +17,13 @@ from PyQt5.QtWidgets import (
     QTableView, QHeaderView, QAbstractItemView,
     QFileDialog, QMessageBox, QProgressBar, QScrollArea,
     QApplication, QMenu, QFrame, QPlainTextEdit, QCheckBox,
-    QRadioButton, QButtonGroup, QCompleter
+    QRadioButton, QButtonGroup, QCompleter, QTabBar
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal,
     QAbstractTableModel, QModelIndex, QDate, QDateTime
 )
-from PyQt5.QtGui import QColor, QBrush, QDoubleValidator
+from PyQt5.QtGui import QColor, QBrush, QDoubleValidator, QFont
 
 from db_manager import DBManager
 from form_parser import FormParser
@@ -32,22 +32,37 @@ from core.param_service import (
     merge_options, normalize_params, resolve_default, static_options
 )
 from core.query_service import build_final_sql, export_to_excel
+from core.summary_service import compute_summary, compute_cards
 
 
 # ──────────────────────────────────────────────
-#  自定义 TableModel（内置过滤支持）
+#  自定义 TableModel（内置过滤与底部固定合计行支持）
 # ──────────────────────────────────────────────
 class ResultTableModel(QAbstractTableModel):
-    def __init__(self, columns, rows, parent=None):
+    def __init__(self, columns, rows, summary_spec=None, parent=None):
         super(ResultTableModel, self).__init__(parent)
         self._columns = columns
         self._all_rows = rows  # 保存所有原始数据
         self._rows = rows      # 当前显示的数据（过滤后）
         self._filter_text = ''
         self._filter_col = -1  # -1 表示全部列
+        self._summary_spec = str(summary_spec or '').strip()
+        self._summary_row = None
+        self._summary_dict = {}
+        self._recompute_summary()
+
+    def _recompute_summary(self):
+        if self._summary_spec and self._columns:
+            s_row, s_dict = compute_summary(self._columns, self._rows, self._summary_spec)
+            self._summary_row = s_row
+            self._summary_dict = s_dict
+        else:
+            self._summary_row = None
+            self._summary_dict = {}
 
     def rowCount(self, parent=QModelIndex()):
-        return len(self._rows)
+        base = len(self._rows)
+        return base + 1 if self._summary_row else base
 
     def columnCount(self, parent=QModelIndex()):
         return len(self._columns)
@@ -59,10 +74,31 @@ class ResultTableModel(QAbstractTableModel):
         row = index.row()
         col = index.column()
 
+        is_summary = (self._summary_row is not None and row == len(self._rows))
+
         # 边界检查
-        if row < 0 or row >= len(self._rows):
-            return None
+        if not is_summary:
+            if row < 0 or row >= len(self._rows):
+                return None
         if col < 0 or col >= len(self._columns):
+            return None
+
+        if is_summary:
+            val = self._summary_row[col] if col < len(self._summary_row) else ''
+            if role == Qt.DisplayRole:
+                return str(val) if val is not None else ''
+            if role == Qt.FontRole:
+                f = QFont()
+                f.setBold(True)
+                return f
+            if role == Qt.BackgroundRole:
+                return QBrush(QColor('#EFF6FF'))
+            if role == Qt.ForegroundRole:
+                return QBrush(QColor('#1E40AF'))
+            if role == Qt.TextAlignmentRole:
+                if col == 0:
+                    return int(Qt.AlignLeft | Qt.AlignVCenter)
+                return int(Qt.AlignRight | Qt.AlignVCenter)
             return None
 
         val = self._rows[row][col]
@@ -95,6 +131,8 @@ class ResultTableModel(QAbstractTableModel):
                 if 0 <= section < len(self._columns):
                     return self._columns[section]
                 return ''
+            if self._summary_row and section == len(self._rows):
+                return u"∑"
             return str(section + 1)
         return None
 
@@ -126,6 +164,7 @@ class ResultTableModel(QAbstractTableModel):
                 if self._row_matches(row):
                     self._rows.append(row)
 
+        self._recompute_summary()
         self.layoutChanged.emit()
 
     def _row_matches(self, row):
@@ -158,15 +197,18 @@ class ResultTableModel(QAbstractTableModel):
 # ──────────────────────────────────────────────
 class QueryWorker(QThread):
     # 注意：不能命名为 finished，会与 QThread 内置信号冲突导致崩溃
-    result_ready    = pyqtSignal(list, list)
-    query_error     = pyqtSignal(str)
-    query_cancelled = pyqtSignal()
+    result_ready       = pyqtSignal(list, list)
+    multi_result_ready = pyqtSignal(dict)
+    query_error        = pyqtSignal(str)
+    query_cancelled    = pyqtSignal()
 
-    def __init__(self, db_manager, sql, query_type='select'):
+    def __init__(self, db_manager, sql, query_type='select', form=None, normalized_params=None):
         super(QueryWorker, self).__init__()
         self.db_manager = db_manager
         self.sql        = sql
         self.query_type = query_type
+        self.form       = form
+        self.normalized_params = normalized_params or {}
         self._cancelled = False
 
     def cancel(self):
@@ -174,15 +216,48 @@ class QueryWorker(QThread):
         self._cancelled = True
 
     def run(self):
-        logger.info("QueryWorker started, sql: %s", self.sql[:100] if self.sql else "EMPTY")
+        logger.info("QueryWorker started")
         try:
-            columns, rows = self.db_manager.execute_query(self.sql, self.query_type)
+            blocks = getattr(self.form, 'blocks', []) if self.form else []
+            if not blocks:
+                columns, rows = self.db_manager.execute_query(self.sql, self.query_type)
+                if self._cancelled:
+                    self.query_cancelled.emit()
+                    return
+                self.result_ready.emit(columns, rows)
+                self.multi_result_ready.emit({'main': {'columns': columns, 'rows': rows, 'block': None}})
+                return
+
+            blocks_results = {}
+            primary_cols = None
+            primary_rows = None
+
+            for block in blocks:
+                if self._cancelled:
+                    self.query_cancelled.emit()
+                    return
+                b_sql = build_final_sql(self.form, self.normalized_params, already_normalized=True, sql_template=block.sql)
+                cols, rows = self.db_manager.execute_query(b_sql, self.query_type, datasource=block.datasource)
+                blocks_results[block.id] = {
+                    'columns': cols,
+                    'rows': rows,
+                    'block': block
+                }
+                if block.btype == 'table' and primary_cols is None:
+                    primary_cols = cols
+                    primary_rows = rows
+
             if self._cancelled:
-                logger.info("QueryWorker cancelled after query, discarding results")
                 self.query_cancelled.emit()
                 return
-            logger.info("QueryWorker success, columns: %s, rows: %d", columns, len(rows))
-            self.result_ready.emit(columns, rows)
+
+            if primary_cols is None and blocks:
+                first_id = blocks[0].id
+                primary_cols = blocks_results[first_id]['columns']
+                primary_rows = blocks_results[first_id]['rows']
+
+            self.result_ready.emit(primary_cols or [], primary_rows or [])
+            self.multi_result_ready.emit(blocks_results)
         except Exception as e:
             if self._cancelled:
                 self.query_cancelled.emit()
@@ -221,7 +296,7 @@ class ExportWorker(QThread):
     export_error = pyqtSignal(str)   # 失败：错误信息
 
     def __init__(self, path, columns, rows, form_title, form_desc,
-                 elapsed, params_info, final_sql):
+                 elapsed, params_info, final_sql, summary_row=None, blocks=None):
         super(ExportWorker, self).__init__()
         self.path         = path
         self.columns      = columns
@@ -231,13 +306,16 @@ class ExportWorker(QThread):
         self.elapsed      = elapsed
         self.params_info  = params_info
         self.final_sql    = final_sql
+        self.summary_row  = summary_row
+        self.blocks       = blocks
 
     def run(self):
         try:
             export_to_excel(
                 self.path, self.columns, self.rows,
                 self.form_title, self.form_desc,
-                self.elapsed, self.params_info, self.final_sql
+                self.elapsed, self.params_info, self.final_sql,
+                summary_row=self.summary_row, blocks=self.blocks
             )
             self.export_done.emit(self.path)
         except Exception as e:
@@ -389,6 +467,30 @@ class QueryTab(QWidget):
         action_row.addStretch()
         action_row.addWidget(self.status_lbl)
         root.addLayout(action_row)
+
+        # 顶部指标卡片区域
+        self.cards_frame = QFrame()
+        self.cards_frame.setObjectName("cards_container")
+        self.cards_frame.setStyleSheet(
+            "QFrame#cards_container { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; }"
+        )
+        self.cards_layout = QHBoxLayout(self.cards_frame)
+        self.cards_layout.setContentsMargins(12, 10, 12, 10)
+        self.cards_layout.setSpacing(14)
+        self.cards_frame.hide()
+        root.addWidget(self.cards_frame)
+
+        # 多区块表格切换栏
+        self.block_tabs = QTabBar()
+        self.block_tabs.setDrawBase(False)
+        self.block_tabs.setStyleSheet(
+            "QTabBar::tab { background: #E2E8F0; color: #475569; padding: 6px 14px; margin-right: 4px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-size: 12px; }"
+            "QTabBar::tab:selected { background: #1A6EB5; color: #FFFFFF; font-weight: bold; }"
+            "QTabBar::tab:hover:!selected { background: #CBD5E1; color: #1E293B; }"
+        )
+        self.block_tabs.currentChanged.connect(self._on_block_tab_changed)
+        self.block_tabs.hide()
+        root.addWidget(self.block_tabs)
 
         # 结果表格
         self.table_view = QTableView()
@@ -699,8 +801,12 @@ class QueryTab(QWidget):
         self._query_start = time.time()
 
         try:
-            self._worker = QueryWorker(self.db_manager, sql, self.form.query_type)
+            self._worker = QueryWorker(
+                self.db_manager, sql, self.form.query_type,
+                form=self.form, normalized_params=self._normalized_param_values()
+            )
             self._worker.result_ready.connect(self._on_query_done)
+            self._worker.multi_result_ready.connect(self._on_multi_query_done)
             self._worker.query_error.connect(self._on_query_error)
             self._worker.query_cancelled.connect(self._on_query_cancelled)
             logger.info("Starting worker thread")
@@ -711,6 +817,90 @@ class QueryTab(QWidget):
             self.query_btn.setEnabled(True)
             self.progress.hide()
             QMessageBox.critical(self, u"错误", u"启动查询线程失败：\n{}".format(str(e)))
+
+    def _on_multi_query_done(self, blocks_results):
+        logger.info("_on_multi_query_done called, blocks=%s", list(blocks_results.keys()))
+        self._last_blocks_results = blocks_results
+        cards_found = []
+        for b_id, b_data in blocks_results.items():
+            b = b_data.get('block')
+            if b and b.btype == 'cards':
+                cards = compute_cards(b_data['columns'], b_data['rows'])
+                cards_found.extend(cards)
+
+        # 清除现有卡片控件
+        while self.cards_layout.count():
+            item = self.cards_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        if cards_found:
+            for card in cards_found:
+                card_box = QFrame()
+                card_box.setStyleSheet(
+                    "QFrame { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; }"
+                )
+                c_layout = QVBoxLayout(card_box)
+                c_layout.setContentsMargins(12, 8, 12, 8)
+                c_layout.setSpacing(4)
+
+                t_lbl = QLabel(card['title'])
+                t_lbl.setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold;")
+                v_lbl = QLabel(card['formatted'])
+                v_lbl.setStyleSheet("color: #1D4ED8; font-size: 18px; font-weight: bold;")
+
+                c_layout.addWidget(t_lbl)
+                c_layout.addWidget(v_lbl)
+                self.cards_layout.addWidget(card_box)
+            self.cards_layout.addStretch()
+            self.cards_frame.show()
+        else:
+            self.cards_frame.hide()
+
+        # 处理多表格区块切换
+        self._table_blocks = []
+        for b_id, b_data in blocks_results.items():
+            b = b_data.get('block')
+            if b and b.btype == 'table' and b_data.get('columns'):
+                self._table_blocks.append((b, b_data))
+
+        self.block_tabs.blockSignals(True)
+        self.block_tabs.clear()
+        if len(self._table_blocks) > 1:
+            for b, b_data in self._table_blocks:
+                tab_title = u"{} ({})".format(b.title or b.id, len(b_data.get('rows', [])))
+                self.block_tabs.addTab(tab_title)
+            self.block_tabs.setCurrentIndex(0)
+            self.block_tabs.show()
+        else:
+            self.block_tabs.hide()
+        self.block_tabs.blockSignals(False)
+
+        # 检查首个表格是否有 summary_footer
+        for b in getattr(self.form, 'blocks', []):
+            if b.btype == 'table' and b.id in blocks_results:
+                b_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
+                if b_spec and hasattr(self, 'table_view') and self.table_view.model():
+                    current_model = self.table_view.model()
+                    if isinstance(current_model, ResultTableModel) and not current_model._summary_spec:
+                        current_model._summary_spec = b_spec
+                        current_model._recompute_summary()
+                        current_model.layoutChanged.emit()
+                break
+
+    def _on_block_tab_changed(self, index):
+        if not hasattr(self, '_table_blocks') or index < 0 or index >= len(self._table_blocks):
+            return
+        b, b_data = self._table_blocks[index]
+        self._on_query_done(b_data['columns'], b_data['rows'])
+        b_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
+        if b_spec and hasattr(self, 'table_view') and self.table_view.model():
+            current_model = self.table_view.model()
+            if isinstance(current_model, ResultTableModel):
+                current_model._summary_spec = b_spec
+                current_model._recompute_summary()
+                current_model.layoutChanged.emit()
 
     def _on_query_done(self, columns, rows):
         logger.info("_on_query_done called, columns=%s, rows=%d", columns, len(rows))
@@ -741,7 +931,8 @@ class QueryTab(QWidget):
                 return
 
             logger.info("Creating ResultTableModel")
-            model = ResultTableModel(columns, rows)
+            summary_spec = getattr(self.form, 'summary_footer', '')
+            model = ResultTableModel(columns, rows, summary_spec=summary_spec)
             # 暂时不使用代理模型，直接使用源模型
             logger.info("Setting table model (direct)")
             self.table_view.setModel(model)
@@ -842,10 +1033,24 @@ class QueryTab(QWidget):
 
         # 收集导出数据（主线程取，避免跨线程访问 UI）
         model = self.table_view.model()
+        summary_row = getattr(model, '_summary_row', None)
         if hasattr(model, 'get_filtered_count') and model.get_filtered_count() < len(self._last_rows):
             export_rows = model._rows[:]
         else:
             export_rows = self._last_rows
+
+        blocks_for_export = []
+        if getattr(self, '_last_blocks_results', None):
+            for b_id, b_data in self._last_blocks_results.items():
+                b = b_data.get('block')
+                if b and b.btype == 'table' and b_data.get('columns'):
+                    blocks_for_export.append({
+                        'title': b.title,
+                        'columns': b_data.get('columns', []),
+                        'rows': b_data.get('rows', []),
+                        'summary_row': b_data.get('summary_row'),
+                        'type': 'table'
+                    })
 
         try:
             param_vals = self._normalized_param_values()
@@ -863,7 +1068,8 @@ class QueryTab(QWidget):
         self._export_worker = ExportWorker(
             path, self._last_columns, export_rows,
             self.form.title, self.form.description,
-            self._elapsed, params_info, final_sql
+            self._elapsed, params_info, final_sql,
+            summary_row=summary_row, blocks=blocks_for_export
         )
         self._export_worker.export_done.connect(self._on_export_done)
         self._export_worker.export_error.connect(self._on_export_error)

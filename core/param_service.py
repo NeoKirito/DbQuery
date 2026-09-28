@@ -219,11 +219,11 @@ def ensure_sql_placeholders_resolved(form, sql):
         )
 
 
-def build_sql_with_params(form, normalized_params):
+def build_sql_with_params(form, normalized_params, sql_template=None):
     """基于参数定义白名单替换占位符，保留既有 SQL 单引号转义规则。"""
     from core.query_service import escape_sql_param
 
-    sql = getattr(form, 'sql', '')
+    sql = sql_template if sql_template is not None else getattr(form, 'sql', '')
     allowed_names = [param.name for param in getattr(form, 'params', []) or []]
     for name in allowed_names:
         if name not in normalized_params:

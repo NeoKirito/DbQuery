@@ -947,10 +947,17 @@ def api_test_connection():
         return jsonify({'success': False, 'message': '数据服务连接异常，请稍后重试。'})
 
 
+@app.route('/api/datasources')
+@login_required
+def api_datasources():
+    """返回已配置的所有数据源列表。"""
+    return jsonify(DBManager().get_datasources())
+
+
 @app.route('/api/query', methods=['POST'])
 @login_required
 def api_query():
-    """执行受超时与行数限制保护的查询。"""
+    """执行受超时与行数限制保护的查询，支持单表单多区块跨数据源与合计汇总。"""
     data = request.get_json(silent=True)
     if not data:
         return error_response('请求信息不完整，请重新操作。', 400)
@@ -972,9 +979,7 @@ def api_query():
         db_manager = DBManager()
         options_by_name, option_warnings = form_options(form, db_manager)
         normalized_params = normalize_params(form, params, options_by_name=options_by_name)
-        sql = build_final_sql(form, normalized_params, already_normalized=True)
     except RequiredParameterError:
-        # 保留既有 Web API 的业务提示，前端和历史集成方均可兼容。
         return error_response('请填写完整的查询条件。', 400)
     except ParameterError as exc:
         return error_response(str(exc), 400)
@@ -982,39 +987,122 @@ def api_query():
         logger.exception('查询条件处理失败: %s', decoded_path)
         return error_response('查询条件处理失败，请联系管理员。', 500)
 
-    # 现有安全检查不可删除、不可削弱。
-    safe, reason = FormParser.is_safe_sql(sql, form.query_type)
-    if not safe:
-        logger.warning('查询配置未通过安全检查: %s; 原因: %s', decoded_path, reason)
-        return error_response('当前查询配置无法执行，请联系管理员。', 400)
+    from core.summary_service import compute_summary, compute_cards
 
     web_config = db_manager.get_web_config()
     started_at = time.monotonic()
-    try:
-        columns, rows, truncated = db_manager.execute_query_limited(
-            sql,
-            query_timeout=web_config['query_timeout'],
-            max_rows=web_config['max_rows'],
-            query_type=form.query_type
-        )
-    except QueryTimeoutError:
-        return error_response(
-            '查询超时，请缩小查询范围或增加查询条件。', 408, 'timeout'
-        )
-    except Exception as exc:
-        logger.exception('查询执行失败: %s', decoded_path)
-        return error_response('数据服务暂时不可用，请稍后重试。', 500)
+    blocks = getattr(form, 'blocks', []) or []
+    if not blocks:
+        # 若无显式区块，构建单表默认区块
+        from form_parser import QueryBlock
+        blocks = [QueryBlock(
+            block_id='main',
+            title=form.title,
+            btype='table',
+            datasource=form.datasource,
+            width='100%',
+            summary_footer=form.summary_footer,
+            sql=form.sql,
+            order=1
+        )]
 
-    safe_rows = normalize_rows(rows)
+    blocks_resp = []
+    primary_columns = []
+    primary_rows = []
+    primary_truncated = False
+    cards_summary = []
+    primary_summary_row = []
+    primary_summary_dict = {}
+
+    for block in blocks:
+        b_sql = build_final_sql(form, normalized_params, already_normalized=True, sql_template=block.sql)
+        safe, reason = FormParser.is_safe_sql(b_sql, form.query_type)
+        if not safe:
+            logger.warning('区块 %s SQL未通过安全检查: %s; 原因: %s', block.id, decoded_path, reason)
+            return error_response('当前查询配置无法执行，请联系管理员。', 400)
+
+        try:
+            try:
+                b_cols, b_rows, b_trunc = db_manager.execute_query_limited(
+                    b_sql,
+                    query_timeout=web_config['query_timeout'],
+                    max_rows=web_config['max_rows'],
+                    query_type=form.query_type,
+                    datasource=block.datasource
+                )
+            except TypeError as te:
+                if 'datasource' in str(te):
+                    b_cols, b_rows, b_trunc = db_manager.execute_query_limited(
+                        b_sql,
+                        query_timeout=web_config['query_timeout'],
+                        max_rows=web_config['max_rows'],
+                        query_type=form.query_type
+                    )
+                else:
+                    raise
+        except QueryTimeoutError:
+            return error_response('查询超时，请缩小查询范围或增加查询条件。', 408, 'timeout')
+        except Exception:
+            logger.exception('查询执行失败: %s / block %s', decoded_path, block.id)
+            return error_response('数据服务暂时不可用，请稍后重试。', 500)
+
+        safe_b_rows = normalize_rows(b_rows)
+        b_cards = []
+        b_summary_row = []
+        b_summary_dict = {}
+
+        if block.btype == 'cards':
+            b_cards = compute_cards(b_cols, safe_b_rows)
+            cards_summary.extend(b_cards)
+        else:
+            b_summary_row, b_summary_dict = compute_summary(
+                b_cols, safe_b_rows, block.summary_footer or form.summary_footer
+            )
+            if not primary_columns:
+                primary_columns = b_cols
+                primary_rows = safe_b_rows
+                primary_truncated = b_trunc
+                primary_summary_row = b_summary_row
+                primary_summary_dict = b_summary_dict
+
+        blocks_resp.append({
+            'id': block.id,
+            'title': block.title,
+            'type': block.btype,
+            'datasource': block.datasource,
+            'width': block.width,
+            'columns': b_cols,
+            'rows': safe_b_rows,
+            'summary_footer': block.summary_footer,
+            'summary_row': b_summary_row,
+            'summary_dict': b_summary_dict,
+            'cards': b_cards,
+            'truncated': b_trunc,
+            'row_count': len(safe_b_rows),
+            'col_count': len(b_cols),
+        })
+
+    # 若全为卡片区块或未选出主表，兜底取首个区块数据
+    if not primary_columns and blocks_resp:
+        primary_columns = blocks_resp[0]['columns']
+        primary_rows = blocks_resp[0]['rows']
+        primary_truncated = blocks_resp[0]['truncated']
+        primary_summary_row = blocks_resp[0].get('summary_row', [])
+        primary_summary_dict = blocks_resp[0].get('summary_dict', {})
+
     return jsonify({
-        'columns': columns,
-        'rows': safe_rows,
+        'columns': primary_columns,
+        'rows': primary_rows,
         'elapsed': round(time.monotonic() - started_at, 2),
-        'row_count': len(safe_rows),
-        'col_count': len(columns),
-        'truncated': truncated,
+        'row_count': len(primary_rows),
+        'col_count': len(primary_columns),
+        'truncated': primary_truncated,
         'max_rows': web_config['max_rows'],
         'option_warnings': option_warnings,
+        'summary_row': primary_summary_row,
+        'summary_dict': primary_summary_dict,
+        'cards': cards_summary,
+        'blocks': blocks_resp,
     })
 
 
@@ -1060,11 +1148,27 @@ def api_export():
     file_descriptor, export_path = tempfile.mkstemp(prefix='dbquery_', suffix='.xlsx')
     os.close(file_descriptor)
 
+    summary_row = data.get('summary_row')
+    blocks = data.get('blocks')
+
     try:
-        export_to_excel(
-            export_path, columns, rows,
-            form_title, form_desc, elapsed, params_info, final_sql
-        )
+        if summary_row or blocks:
+            try:
+                export_to_excel(
+                    export_path, columns, rows,
+                    form_title, form_desc, elapsed, params_info, final_sql,
+                    summary_row, blocks
+                )
+            except TypeError:
+                export_to_excel(
+                    export_path, columns, rows,
+                    form_title, form_desc, elapsed, params_info, final_sql
+                )
+        else:
+            export_to_excel(
+                export_path, columns, rows,
+                form_title, form_desc, elapsed, params_info, final_sql
+            )
         response = send_file(
             export_path,
             as_attachment=True,

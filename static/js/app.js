@@ -374,8 +374,10 @@ var TabManager = {
         html += '<span class="result-warning d-none" aria-live="polite"></span></div>';
         html += '<div class="result-heading-right result-dt-tools"></div></div>';
         html += '<div class="inline-message d-none" role="status"></div>';
+        html += '<div class="result-cards-container d-none" id="result-cards-' + tabId + '"></div>';
+        html += '<div class="result-block-switcher d-none" id="result-block-switcher-' + tabId + '"></div>';
         html += '<div class="result-panel">';
-        html += '<table class="display result-table" style="width:100%"><thead></thead><tbody></tbody></table>';
+        html += '<table class="display result-table" style="width:100%"><thead></thead><tbody></tbody><tfoot class="result-tfoot"></tfoot></table>';
         html += '<div class="result-empty">设置查询条件后点击“查询”</div>';
         html += '</div></section>';
 
@@ -1343,6 +1345,94 @@ function querySummary(data) {
 function renderResult(data, tab) {
     tab = tab || (TabManager ? TabManager.getActiveTab() : null) || TabManager.getLegacyActiveTab();
     var $pane = tab && tab.$pane ? tab.$pane : $(document);
+
+    // 1. 渲染顶部指标汇总卡片
+    var $cards = $pane.find('#result-cards, .result-cards-container');
+    if (!$cards.length) {
+        $cards = $('<div class="result-cards-container" id="result-cards"></div>');
+        $pane.find('.result-panel').before($cards);
+    }
+    if (data.cards && data.cards.length > 0) {
+        var cardsHtml = '';
+        for (var ci = 0; ci < data.cards.length; ci++) {
+            var card = data.cards[ci];
+            cardsHtml += '<div class="kpi-card">';
+            cardsHtml += '  <div class="kpi-card-title">' + esc(card.title || '') + '</div>';
+            cardsHtml += '  <div class="kpi-card-value">' + esc(card.formatted || String(card.value != null ? card.value : '')) + '</div>';
+            cardsHtml += '</div>';
+        }
+        $cards.html(cardsHtml).removeClass('d-none').show();
+    } else {
+        $cards.empty().addClass('d-none').hide();
+    }
+
+    // 2. 检查多表格区块切换
+    var tableBlocks = (data.blocks || []).filter(function (b) {
+        return b.type === 'table' && b.columns && b.columns.length > 0;
+    });
+    var $switcher = $pane.find('#result-block-switcher, .result-block-switcher');
+    if (!$switcher.length) {
+        $switcher = $('<div class="result-block-switcher" id="result-block-switcher"></div>');
+        $pane.find('.result-panel').before($switcher);
+    }
+
+    if (tableBlocks.length > 1) {
+        tab.activeBlockIdx = 0;
+        var switcherHtml = '';
+        for (var bi = 0; bi < tableBlocks.length; bi++) {
+            var tb = tableBlocks[bi];
+            var btnTitle = esc(tb.title || tb.id);
+            var isAct = (bi === 0);
+            switcherHtml += '<button type="button" class="block-tab-btn' + (isAct ? ' active' : '') + '" data-bidx="' + bi + '">';
+            switcherHtml += btnTitle + ' <small>(' + (tb.row_count || 0) + ')</small>';
+            switcherHtml += '</button>';
+        }
+        $switcher.html(switcherHtml).removeClass('d-none').show();
+
+        $switcher.find('.block-tab-btn').off('click').on('click', function () {
+            var bidx = parseInt($(this).data('bidx'), 10);
+            if (tab.activeBlockIdx !== bidx) {
+                tab.activeBlockIdx = bidx;
+                var targetBlock = tableBlocks[bidx];
+                var blockData = {
+                    columns: targetBlock.columns,
+                    rows: targetBlock.rows,
+                    row_count: targetBlock.row_count,
+                    col_count: targetBlock.col_count,
+                    summary_row: targetBlock.summary_row,
+                    summary_dict: targetBlock.summary_dict,
+                    truncated: targetBlock.truncated,
+                    cards: data.cards,
+                    blocks: data.blocks
+                };
+                renderTableData(blockData, tab);
+                $switcher.find('.block-tab-btn').removeClass('active');
+                $(this).addClass('active');
+            }
+        });
+
+        // 渲染首个表格区块
+        var initialBlock = tableBlocks[0];
+        renderTableData({
+            columns: initialBlock.columns,
+            rows: initialBlock.rows,
+            row_count: initialBlock.row_count,
+            col_count: initialBlock.col_count,
+            summary_row: initialBlock.summary_row,
+            summary_dict: initialBlock.summary_dict,
+            truncated: initialBlock.truncated,
+            cards: data.cards,
+            blocks: data.blocks
+        }, tab);
+    } else {
+        $switcher.empty().addClass('d-none').hide();
+        renderTableData(data, tab);
+    }
+}
+
+function renderTableData(data, tab) {
+    tab = tab || (TabManager ? TabManager.getActiveTab() : null) || TabManager.getLegacyActiveTab();
+    var $pane = tab && tab.$pane ? tab.$pane : $(document);
     var $table = $pane.find('#result-table, .result-table').first();
 
     if (tab && tab.dataTable) {
@@ -1356,14 +1446,19 @@ function renderResult(data, tab) {
 
     var $thead = $table.children('thead');
     var $tbody = $table.children('tbody');
+    var $tfoot = $table.children('tfoot');
     if (!$thead.length) {
         $thead = $('<thead id="result-thead"></thead>').appendTo($table);
     }
     if (!$tbody.length) {
         $tbody = $('<tbody id="result-tbody"></tbody>').appendTo($table);
     }
+    if (!$tfoot.length) {
+        $tfoot = $('<tfoot id="result-tfoot"></tfoot>').appendTo($table);
+    }
     $thead.empty();
     $tbody.empty();
+    $tfoot.empty();
 
     var head = '<tr>';
     for (var index = 0; index < data.columns.length; index++) {
@@ -1386,6 +1481,20 @@ function renderResult(data, tab) {
         body += '</tr>';
     }
     $tbody.html(body);
+
+    // 渲染底部合计行（如有）
+    if (data.summary_row && data.summary_row.length === data.columns.length) {
+        var foot = '<tr class="summary-footer-row">';
+        for (var fi = 0; fi < data.summary_row.length; fi++) {
+            var fval = data.summary_row[fi];
+            var fDisplay = (fval === null || fval === undefined) ? '' : esc(String(fval));
+            foot += '<th class="summary-footer-cell">' + fDisplay + '</th>';
+        }
+        foot += '</tr>';
+        $tfoot.html(foot);
+    } else {
+        $tfoot.remove();
+    }
 
     var dt = $table.DataTable({
         paging: true,
@@ -1450,7 +1559,9 @@ function exportExcel(tabId) {
             params: collectParams($pane),
             columns: resultData.columns,
             rows: resultData.rows,
-            elapsed: resultData.elapsed
+            elapsed: resultData.elapsed,
+            summary_row: resultData.summary_row,
+            blocks: resultData.blocks
         }),
         xhrFields: {responseType: 'blob'},
         success: function (blob, status, xhr) {

@@ -93,6 +93,26 @@ class QueryParam:
         self.allow_custom = allow_custom
 
 
+class QueryBlock:
+    """查询区块描述（支持单表单多查询、跨数据源、汇总卡片及独立表格排版）。"""
+
+    def __init__(self, block_id='main', title='', btype='table', datasource='default',
+                 width='100%', summary_footer='', sql='', order=1):
+        self.id = block_id
+        self.title = title
+        self.btype = (btype or 'table').lower().strip()
+        self.datasource = (datasource or 'default').lower().strip()
+        self.width = width or '100%'
+        self.summary_footer = summary_footer or ''
+        self.sql = (sql or '').strip()
+        self.order = order
+
+    def __repr__(self):
+        return "<QueryBlock id={} type={} ds={} sql_len={}>".format(
+            self.id, self.btype, self.datasource, len(self.sql)
+        )
+
+
 class QueryForm:
     """完整的查询表单。"""
 
@@ -108,6 +128,11 @@ class QueryForm:
         self.params = []
         self.sql = ''
         self.file_path = ''
+        # 新增多数据源、合计与布局支持
+        self.datasource = 'default'
+        self.summary_footer = ''
+        self.layout = []
+        self.blocks = []
 
 
 class FormParser:
@@ -120,6 +145,20 @@ class FormParser:
         pattern = r'\[' + name + r'\](.*?)(?=\n\s*\[|\Z)'
         match = re.search(pattern, content, re.DOTALL | re.IGNORECASE)
         return match.group(1).strip() if match else ''
+
+    @staticmethod
+    def _get_all_sections(content):
+        """提取所有 [section_name] 的名称与内容。"""
+        pattern = re.compile(
+            r'^\s*\[([a-zA-Z0-9_\.\-]+)\][^\n\r]*\r?\n?(.*?)(?=(?:^\s*\[[a-zA-Z0-9_\.\-]+\]|\Z))',
+            re.MULTILINE | re.DOTALL
+        )
+        sections = []
+        for match in pattern.finditer(content):
+            sec_name = match.group(1).strip()
+            sec_body = match.group(2).strip()
+            sections.append((sec_name, sec_body))
+        return sections
 
     @staticmethod
     def _parse_type(raw_type):
@@ -272,6 +311,12 @@ class FormParser:
                     form.query_type = value.lower().strip()
                 elif key == 'web_enabled':
                     form.web_enabled = value.lower() in ('1', 'true', 'yes', 'on', '是')
+                elif key in ('datasource', 'ds', 'db', 'data_source'):
+                    form.datasource = value.lower().strip()
+                elif key in ('summary_footer', 'summary', 'footer'):
+                    form.summary_footer = value.strip()
+                elif key == 'layout':
+                    form.layout = [s.strip() for s in value.replace(',', ' ').replace(';', ' ').split() if s.strip()]
 
         form.order = meta_order
         form.group_order = meta_group_order
@@ -310,7 +355,113 @@ class FormParser:
                 options_sql, searchable, allow_custom
             ))
 
+        # 解析区块配置 [block.<id>] 或 [sql.<id>]
+        all_sections = FormParser._get_all_sections(content)
+        block_sections = []
+        for sec_name, sec_body in all_sections:
+            sec_lower = sec_name.lower()
+            if sec_lower.startswith('block.') or (sec_lower.startswith('sql.') and sec_lower != 'sql'):
+                block_id = sec_name.split('.', 1)[1].strip()
+                block_sections.append((block_id, sec_body))
+
+        if block_sections:
+            order_idx = 1
+            for block_id, body in block_sections:
+                b_title = ''
+                b_type = 'table'
+                b_ds = form.datasource
+                b_width = '100%'
+                b_summary = ''
+                b_order = order_idx
+                order_idx += 1
+                b_sql_lines = []
+                in_sql = False
+
+                for line in body.splitlines():
+                    trimmed = line.strip()
+                    if not in_sql:
+                        if not trimmed or trimmed.startswith('#') or trimmed.startswith(';'):
+                            continue
+                        if '=' in trimmed:
+                            k, v = trimmed.split('=', 1)
+                            k = k.strip().lower()
+                            v = v.strip()
+                            if k == 'title':
+                                b_title = v
+                                continue
+                            elif k in ('type', 'btype'):
+                                b_type = v.lower()
+                                continue
+                            elif k in ('datasource', 'ds', 'db'):
+                                b_ds = v.lower()
+                                continue
+                            elif k == 'width':
+                                b_width = v
+                                continue
+                            elif k in ('summary_footer', 'summary', 'footer'):
+                                b_summary = v
+                                continue
+                            elif k in ('order', 'seq'):
+                                try:
+                                    b_order = float(v)
+                                except ValueError:
+                                    pass
+                                continue
+                            elif k == 'sql':
+                                in_sql = True
+                                if v:
+                                    b_sql_lines.append(v)
+                                continue
+                        first_word = trimmed.split()[0].upper() if trimmed else ''
+                        if first_word in ('SELECT', 'EXEC', 'EXECUTE', 'WITH', '--'):
+                            in_sql = True
+                            b_sql_lines.append(line)
+                            continue
+                    else:
+                        b_sql_lines.append(line)
+
+                b_sql = '\n'.join(b_sql_lines).strip()
+                if not b_title:
+                    b_title = block_id
+                form.blocks.append(QueryBlock(
+                    block_id=block_id,
+                    title=b_title,
+                    btype=b_type,
+                    datasource=b_ds,
+                    width=b_width,
+                    summary_footer=b_summary,
+                    sql=b_sql,
+                    order=b_order
+                ))
+
+            if form.layout:
+                layout_map = {name.lower(): idx for idx, name in enumerate(form.layout)}
+                def sort_key(b):
+                    name_key = b.id.lower()
+                    block_key = 'block.{}'.format(name_key)
+                    if name_key in layout_map:
+                        return (0, layout_map[name_key])
+                    if block_key in layout_map:
+                        return (0, layout_map[block_key])
+                    return (1, b.order)
+                form.blocks.sort(key=sort_key)
+            else:
+                form.blocks.sort(key=lambda b: b.order)
+
         form.sql = FormParser._get_section(content, 'sql')
+        if not form.blocks and form.sql:
+            form.blocks.append(QueryBlock(
+                block_id='main',
+                title=form.title,
+                btype='table',
+                datasource=form.datasource,
+                width='100%',
+                summary_footer=form.summary_footer,
+                sql=form.sql,
+                order=1
+            ))
+        elif form.blocks and not form.sql:
+            form.sql = form.blocks[0].sql
         return form
 
     @staticmethod

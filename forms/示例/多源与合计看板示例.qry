@@ -1,0 +1,77 @@
+[meta]
+title = 多数据源与指标合计看板
+group = 示例
+description = 演示单表单多SQL查询、顶部指标汇总卡片、表格底部合计行与跨数据源配置。
+web_enabled = true
+layout = summary, dept_stat, detail
+
+[params]
+start_date = 统计开始日期 | date | {today}
+dept_name = 关注科室 | text | 内科 | placeholder=输入科室名称
+
+# ── 区块 1：顶部指标汇总卡（cards） ──
+[block.summary]
+title = 运营核心指标
+type = cards
+datasource = default
+sql = SELECT 
+    128 AS 登记人次,
+    35600.00 AS 实收总额,
+    278.13 AS 客单均价,
+    N'98.5%' AS 准时出检率
+
+# ── 区块 2：科室汇总表（table + 底部自动合计行） ──
+[block.dept_stat]
+title = 各科室汇总
+type = table
+datasource = default
+summary_footer = auto
+sql = SELECT 
+    N'内科' AS 科室名称, 48 AS 体检人次, 14200.00 AS 应收金额, 13800.00 AS 实收金额
+UNION ALL
+SELECT 
+    N'外科' AS 科室名称, 36 AS 体检人次, 10800.00 AS 应收金额, 10500.00 AS 实收金额
+UNION ALL
+SELECT 
+    N'检验科' AS 科室名称, 44 AS 体检人次, 11500.00 AS 应收金额, 11300.00 AS 实收金额
+
+# ── 区块 3：明细清单表（table + 自定义合计规则） ──
+[block.detail]
+title = 人员明细清单
+type = table
+datasource = default
+summary_footer = sum:实收金额; count:体检号
+sql = SELECT 
+    N'TJ20260901' AS 体检号, N'张三' AS 姓名, N'内科' AS 所属科室, 280.00 AS 实收金额, N'已完成' AS 状态
+UNION ALL
+SELECT 
+    N'TJ20260902' AS 体检号, N'李四' AS 姓名, N'外科' AS 所属科室, 350.00 AS 实收金额, N'已完成' AS 状态
+UNION ALL
+SELECT 
+    N'TJ20260903' AS 体检号, N'王五' AS 姓名, N'检验科' AS 所属科室, 420.00 AS 实收金额, N'体检中' AS 状态
+
+# ══════════════════════════════════════════════════════════════
+#  多数据源与合计看板配置说明：
+# ══════════════════════════════════════════════════════════════
+# 1. 多数据源（跨库）：
+#    在 config.ini 中可配置扩展命名库，例如：
+#      [datasource.lis]
+#      server = 192.168.1.20
+#      database = LIS_DB
+#      username = lis_user
+#      password = xxx
+#    然后在区块中设置 datasource = lis，该区块即可直连该数据源执行。
+#    未配置或缺省时自动使用主库 (datasource = default)。
+#
+# 2. 顶部指标卡（type = cards）：
+#    查询返回的第一行数据将自动转化为顶部大字汇总卡片（标题为列名，数值自动千分位与整型格式化）。
+#
+# 3. 表格底部合计行（summary_footer）：
+#    - summary_footer = auto：自动识别数值列并累加求和，首列显示“合计 (N条)”；
+#    - summary_footer = sum:金额,人次; count:体检号; avg:均价：按列名指定聚合函数；
+#    - 过滤时自动根据过滤后的行动态联动重算；导出 Excel 时包含合计行。
+#
+# 4. 自由规划排版（layout）：
+#    在 [meta] 中设置 layout = summary, dept_stat, detail，
+#    系统将严格按照 layout 指定的顺序渲染区块。
+# ══════════════════════════════════════════════════════════════

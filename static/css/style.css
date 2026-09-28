@@ -1498,3 +1498,104 @@ body.standalone-mode .app-body {
     .result-dt-tools { margin-left: 0; }
     .conditions-heading { flex-wrap: wrap; gap: 4px; }
 }
+
+/* ══════════════════════════════════════════════════════════════
+   指标汇总卡片 (KPI Cards) & 多区块切换 & 表格底部合计行
+   ══════════════════════════════════════════════════════════════ */
+.result-cards-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 8px 10px 14px 10px;
+}
+.result-cards-container.d-none { display: none !important; }
+
+.kpi-card {
+    background: #ffffff;
+    border: 1px solid #dcdfe6;
+    border-left: 4px solid #1a6eb5;
+    border-radius: 4px;
+    padding: 10px 18px;
+    min-width: 140px;
+    flex: 0 1 auto;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    transition: transform .15s ease, box-shadow .15s ease;
+}
+.kpi-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.08);
+}
+.kpi-card-title {
+    font-size: 12px;
+    color: #606266;
+    font-weight: 600;
+    margin-bottom: 4px;
+    white-space: nowrap;
+}
+.kpi-card-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: #1a6eb5;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+/* 多区块表格切换标签栏 */
+.result-block-switcher {
+    margin: 0 10px 10px 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid #dcdfe6;
+    padding-bottom: 6px;
+}
+.result-block-switcher.d-none { display: none !important; }
+.block-tab-btn {
+    border: 1px solid #dcdfe6;
+    background: #f5f7fa;
+    color: #606266;
+    padding: 5px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s ease;
+}
+.block-tab-btn:hover {
+    background: #ecf5ff;
+    color: #1a6eb5;
+    border-color: #b3d8ff;
+}
+.block-tab-btn.active {
+    background: #1a6eb5;
+    color: #ffffff;
+    border-color: #1a6eb5;
+    font-weight: 600;
+}
+
+/* 表格底部固定合计行 */
+.result-panel .dataTables_scrollFoot table,
+#result-table tfoot,
+.result-table tfoot {
+    background: #edf5fc !important;
+}
+.summary-footer-row {
+    background: #edf5fc !important;
+}
+.summary-footer-cell,
+.result-panel .dataTables_scrollFoot th {
+    padding: 8px 10px !important;
+    color: #1a6eb5 !important;
+    font-weight: 700 !important;
+    font-size: 12px !important;
+    white-space: nowrap !important;
+    border-right: 1px solid #ebeef5 !important;
+    border-top: 2px solid #b8d4e9 !important;
+    border-bottom: 2px solid #b8d4e9 !important;
+    background: #edf5fc !important;
+    text-align: right !important;
+}
+.summary-footer-cell:first-child,
+.result-panel .dataTables_scrollFoot th:first-child {
+    text-align: left !important;
+}
