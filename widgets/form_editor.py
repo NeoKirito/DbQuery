@@ -10,9 +10,11 @@ from PyQt5.QtWidgets import (
     QLineEdit, QPlainTextEdit, QGroupBox, QFormLayout, QCheckBox,
     QMessageBox, QFileDialog, QSizePolicy, QComboBox, QTabWidget,
     QWidget, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QSplitter, QScrollArea, QFrame, QToolButton
+    QSplitter, QScrollArea, QFrame, QToolButton, QRadioButton, QButtonGroup,
+    QDateEdit, QDateTimeEdit, QTabBar, QListWidget, QListWidgetItem, QStackedWidget,
+    QTextBrowser
 )
-from PyQt5.QtCore import Qt, QObject, QEvent, QTimer
+from PyQt5.QtCore import Qt, QObject, QEvent, QTimer, QDate, QDateTime
 from PyQt5.QtGui import (
     QFont, QTextCharFormat, QColor, QSyntaxHighlighter, QFontMetrics
 )
@@ -155,31 +157,42 @@ class FormEditorDialog(QDialog):
             "文件: " + (self.form.file_path if self.form else "（尚未保存）")
         )
         self.path_label.setStyleSheet("color: #555; font-size: 11px;")
-        help_btn = QPushButton("格式说明")
-        help_btn.setFixedWidth(85)
-        help_btn.clicked.connect(self._show_help)
+        help_btn = QPushButton("📖 查看说明与示例")
+        help_btn.setToolTip("查看表单配置语法说明、参数速查表与 3 套完整范例")
+        help_btn.setStyleSheet("background-color: #EBF3FF; color: #0052CC; font-weight: bold; border: 1px solid #B3D4FF; border-radius: 4px; padding: 4px 10px;")
+        help_btn.clicked.connect(self._goto_docs_tab)
         top_row.addWidget(self.path_label)
         top_row.addStretch()
         top_row.addWidget(help_btn)
         root_layout.addLayout(top_row)
 
-        # 核心 Tab 容器（4个标签页：基本信息、查询参数、区块与排版、源码模式）
+        # 核心 Tab 容器（6个标签页：基本信息、查询参数、区块与排版、效果预览、源码模式、说明与示例）
         self.tab_widget = QTabWidget()
         self.tab_widget.setStyleSheet("""
             QTabBar::tab {
-                padding: 6px 16px;
+                padding: 6px 14px;
                 font-size: 12px;
-                min-width: 90px;
+                min-width: 85px;
             }
             QTabBar::tab:selected {
                 font-weight: bold;
             }
         """)
 
-        self.tab_widget.addTab(self._create_meta_tab(), "📋 基本信息")
-        self.tab_widget.addTab(self._create_params_tab(), "⚙️ 查询条件")
-        self.tab_widget.addTab(self._create_blocks_tab(), "📊 报表区块与排版")
-        self.tab_widget.addTab(self._create_raw_tab(), "📝 源码模式 (.qry)")
+        # 先创建 raw_tab，确保 self.editor 存在
+        self.raw_tab = self._create_raw_tab()
+        self.meta_tab = self._create_meta_tab()
+        self.params_tab = self._create_params_tab()
+        self.blocks_tab = self._create_blocks_tab()
+        self.preview_tab = self._create_preview_tab()
+        self.docs_tab = self._create_docs_tab()
+
+        self.tab_widget.addTab(self.meta_tab, "📋 基本信息")
+        self.tab_widget.addTab(self.params_tab, "⚙️ 查询条件")
+        self.tab_widget.addTab(self.blocks_tab, "📊 报表区块与排版")
+        self.tab_widget.addTab(self.preview_tab, "👀 效果预览")
+        self.tab_widget.addTab(self.raw_tab, "📝 源码模式 (.qry)")
+        self.tab_widget.addTab(self.docs_tab, "📖 使用说明与示例")
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         root_layout.addWidget(self.tab_widget, stretch=1)
 
@@ -221,12 +234,27 @@ class FormEditorDialog(QDialog):
         btn_row.addWidget(cancel_btn)
         root_layout.addLayout(btn_row)
 
+    def _goto_docs_tab(self):
+        """跳转至说明与示例标签页"""
+        if hasattr(self, 'docs_tab'):
+            self.tab_widget.setCurrentWidget(self.docs_tab)
+
     # ── Tab 0: 基本信息 (Meta) ─────────────────
     def _create_meta_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
+
+        # 顶部操作指引横幅
+        meta_banner = QFrame()
+        meta_banner.setStyleSheet("QFrame { background-color: #F0F7FF; border: 1px solid #BAE0FF; border-radius: 6px; padding: 4px; }")
+        mb_layout = QHBoxLayout(meta_banner)
+        mb_layout.setContentsMargins(10, 6, 10, 6)
+        mb_lbl = QLabel("💡 <b>基本信息指南</b>：设定表单标题、目录分类及默认数据源。保存后将自动归入对应分类目录；支持指定全表默认合计规则与多区块排版。")
+        mb_lbl.setStyleSheet("color: #0050B3; font-size: 11px;")
+        mb_layout.addWidget(mb_lbl)
+        layout.addWidget(meta_banner)
 
         # 分组一：表单基本属性
         info_grp = QGroupBox("表单信息与分类")
@@ -236,7 +264,8 @@ class FormEditorDialog(QDialog):
         info_form.setVerticalSpacing(8)
 
         self.title_edit = QLineEdit()
-        self.title_edit.setPlaceholderText("请输入表单标题（如：体检人员统计）")
+        self.title_edit.setPlaceholderText("请输入表单标题（如：体检人员综合统计分析）")
+        self.title_edit.setToolTip("【表单标题】显示在左侧导航树和顶部查询标签页中的中文名称")
         self.title_edit.textChanged.connect(self._on_meta_field_changed)
         info_form.addRow("表单标题:", self.title_edit)
 
@@ -246,7 +275,7 @@ class FormEditorDialog(QDialog):
         self.group_combo.setInsertPolicy(QComboBox.NoInsert)
         self.group_combo.setMinimumHeight(26)
         self.group_combo.setMaxVisibleItems(15)
-        self.group_combo.setToolTip("可直接下拉选择已有分组，或直接输入新分组名称（保存时将自动归入对应文件夹）")
+        self.group_combo.setToolTip("【所属分组】可直接下拉选择已有分组，或直接输入新分组名称（保存时系统将自动创建对应文件夹归类）")
         if self.group_combo.lineEdit():
             self._combo_click_filter = ComboLineEditClickFilter(self.group_combo)
             self.group_combo.lineEdit().installEventFilter(self._combo_click_filter)
@@ -281,6 +310,7 @@ class FormEditorDialog(QDialog):
         if not self.form:
             self.filename_edit = QLineEdit()
             self.filename_edit.setPlaceholderText("文件名（不含 .qry 扩展名）")
+            self.filename_edit.setToolTip("【文件名称】保存到磁盘时的文件名（无需手动输入 .qry 后缀）")
             info_form.addRow("文件名称:", self.filename_edit)
         else:
             self.filename_label = QLabel(os.path.basename(self.form.file_path))
@@ -291,7 +321,7 @@ class FormEditorDialog(QDialog):
         order_row = QHBoxLayout()
         self.order_edit = QLineEdit()
         self.order_edit.setPlaceholderText("排序序号（数字，越小越靠前，留空默认按名称自然排序）")
-        self.order_edit.setToolTip("设置表单在分组内的排序顺序，数值越小越靠前（例如 1, 2, 10 等）")
+        self.order_edit.setToolTip("【显示排序】设置表单在分组内的排列顺序，数值越小越靠前（例如 1, 2, 10 等；留空按字母自然排序）")
         order_row.addWidget(self.order_edit, stretch=1)
         order_hint = QLabel("（数值越小越靠前，留空默认按名称自然排序）")
         order_hint.setStyleSheet("color: #7A869A; font-size: 11px;")
@@ -301,6 +331,7 @@ class FormEditorDialog(QDialog):
 
         self.desc_edit = QLineEdit()
         self.desc_edit.setPlaceholderText("表单的简要说明或用途（可选）")
+        self.desc_edit.setToolTip("【表单描述】鼠标悬停在左侧导航树或上方标签页时弹出的功能提示")
         self.desc_edit.textChanged.connect(self._on_meta_field_changed)
         info_form.addRow("表单描述:", self.desc_edit)
 
@@ -317,6 +348,7 @@ class FormEditorDialog(QDialog):
         self.datasource_combo = QComboBox()
         self.datasource_combo.setEditable(True)
         self._populate_datasources(self.datasource_combo)
+        self.datasource_combo.setToolTip("【默认数据源】表单的主数据库连接。支持跨库多源；跨库数据源可在 config.ini 中进行配置")
         self.datasource_combo.currentTextChanged.connect(self._on_meta_field_changed)
         ds_row = QHBoxLayout()
         ds_row.addWidget(self.datasource_combo, stretch=1)
@@ -329,6 +361,7 @@ class FormEditorDialog(QDialog):
         self.query_type_combo = QComboBox()
         self.query_type_combo.addItem("select - 标准数据查询 (SELECT)", "select")
         self.query_type_combo.addItem("exec - 受控存储过程调用 (EXEC)", "exec")
+        self.query_type_combo.setToolTip("【查询类型】select 为常规只读 SQL 查询；exec 为调用存储过程")
         self.query_type_combo.currentIndexChanged.connect(self._on_meta_field_changed)
         adv_form.addRow("查询类型:", self.query_type_combo)
 
@@ -336,7 +369,7 @@ class FormEditorDialog(QDialog):
         access_row = QHBoxLayout()
         self.web_enabled_check = QCheckBox("允许已登录 Web 用户查看此表单")
         self.web_enabled_check.setChecked(False)
-        self.web_enabled_check.setToolTip("默认不允许。勾选后，已登录的 Web/嵌入页用户才能看到和执行该表单。")
+        self.web_enabled_check.setToolTip("【Web权限】勾选后，登录 Web 网页版的用户才能看到并执行该表单。桌面端不受此开关限制。")
         self.web_enabled_check.toggled.connect(self._on_web_enabled_toggled)
         access_hint = QLabel("默认关闭，桌面端不受影响")
         access_hint.setStyleSheet("color: #667085; font-size: 11px;")
@@ -348,16 +381,24 @@ class FormEditorDialog(QDialog):
         # 默认合计规则
         self.meta_summary_edit = QLineEdit()
         self.meta_summary_edit.setPlaceholderText("留空按常规，或填写 auto（自动对数值列求和），或指定 sum:实收金额; count:体检号")
+        self.meta_summary_edit.setToolTip("【合计规则】\n• 留空：不显示合计行；\n• auto：自动识别数值列并累加求和，首列显示「合计 (N条)」；\n• 指定聚合：如 sum:金额,实收; count:单号; avg:单价。")
         self.meta_summary_edit.textChanged.connect(self._on_meta_field_changed)
         adv_form.addRow("默认合计规则:", self.meta_summary_edit)
 
         # 区块排版自定义
         self.layout_edit = QLineEdit()
-        self.layout_edit.setPlaceholderText("多区块排版顺序（逗号分隔区块ID，留空默认按下方区块列表顺序）")
+        self.layout_edit.setPlaceholderText("多区块排版顺序（逗号分隔区块ID，留空默认按区块列表顺序）")
+        self.layout_edit.setToolTip("【排版顺序】当配置了多个表格或指标卡区块时，可在此以逗号指定显示先后顺序（如：kpi, main, sub）")
         self.layout_edit.textChanged.connect(self._on_meta_field_changed)
         adv_form.addRow("排版顺序(layout):", self.layout_edit)
 
         layout.addWidget(adv_grp)
+
+        # 底部操作提示
+        bottom_tip = QLabel("📌 小贴士：配置完成后，可随时点击上方「👀 效果预览」查看真实渲染，或点击右上角「📖 查看说明与示例」获取模版。")
+        bottom_tip.setStyleSheet("color: #6B778C; font-size: 11px; padding: 4px;")
+        layout.addWidget(bottom_tip)
+
         layout.addStretch()
         return tab
 
@@ -368,6 +409,16 @@ class FormEditorDialog(QDialog):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
+        # 顶部操作指引横幅
+        params_banner = QFrame()
+        params_banner.setStyleSheet("QFrame { background-color: #F0F7FF; border: 1px solid #BAE0FF; border-radius: 6px; padding: 4px; }")
+        pb_layout = QHBoxLayout(params_banner)
+        pb_layout.setContentsMargins(10, 6, 10, 6)
+        pb_lbl = QLabel("💡 <b>查询条件配置指南</b>：定义用户查询界面的输入项。配置后可在报表 SQL 中使用 <b>{参数名}</b> 动态绑定；支持下拉框、日期宏 {today} 及动态 options_sql。")
+        pb_lbl.setStyleSheet("color: #0050B3; font-size: 11px;")
+        pb_layout.addWidget(pb_lbl)
+        layout.addWidget(params_banner)
+
         # 上半部分：参数列表表格 + 操作按钮
         table_grp = QGroupBox("参数列表清单")
         t_layout = QVBoxLayout(table_grp)
@@ -376,12 +427,16 @@ class FormEditorDialog(QDialog):
         btn_bar = QHBoxLayout()
         self.param_add_btn = QPushButton("➕ 添加参数")
         self.param_add_btn.setStyleSheet("background-color: #0052CC; color: white; font-weight: bold; padding: 4px 10px;")
+        self.param_add_btn.setToolTip("向表单追加一个新的查询条件参数")
         self.param_add_btn.clicked.connect(self._on_param_add)
         self.param_del_btn = QPushButton("➖ 删除参数")
+        self.param_del_btn.setToolTip("删除当前选中的参数")
         self.param_del_btn.clicked.connect(self._on_param_delete)
         self.param_up_btn = QPushButton("⬆️ 上移")
+        self.param_up_btn.setToolTip("将选中参数在查询面板中向前移动一位")
         self.param_up_btn.clicked.connect(self._on_param_move_up)
         self.param_down_btn = QPushButton("⬇️ 下移")
+        self.param_down_btn.setToolTip("将选中参数在查询面板中向后移动一位")
         self.param_down_btn.clicked.connect(self._on_param_move_down)
 
         btn_bar.addWidget(self.param_add_btn)
@@ -422,11 +477,13 @@ class FormEditorDialog(QDialog):
         id_lbl_row = QHBoxLayout()
         self.p_name_edit = QLineEdit()
         self.p_name_edit.setPlaceholderText("英文标识，如 start_date")
+        self.p_name_edit.setToolTip("【参数名】在 SQL 中用 {参数名} 引用；只能由字母、数字和下划线组成")
         self.p_name_edit.textChanged.connect(self._save_current_param_details)
         id_lbl_row.addWidget(self.p_name_edit, stretch=1)
         id_lbl_row.addWidget(QLabel("标签:"))
         self.p_label_edit = QLineEdit()
         self.p_label_edit.setPlaceholderText("界面显示，如 开始日期")
+        self.p_label_edit.setToolTip("【显示标签】在客户端查询面板中展示给操作人员的中文标签")
         self.p_label_edit.textChanged.connect(self._save_current_param_details)
         id_lbl_row.addWidget(self.p_label_edit, stretch=1)
         p_form.addRow("参数标识/标签:", id_lbl_row)
@@ -435,27 +492,30 @@ class FormEditorDialog(QDialog):
         type_row = QHBoxLayout()
         self.p_type_combo = QComboBox()
         types = [
-            ('text', '单行文本 (text)'),
-            ('date', '日期选择 (date, yyyy-MM-dd)'),
-            ('datetime', '日期时间 (datetime, yyyy-MM-dd HH:mm:ss)'),
-            ('number', '数值输入 (number)'),
-            ('select', '下拉选择框 (select)'),
-            ('radio', '单选项 (radio)'),
-            ('textarea', '多行长文本 (textarea)'),
-            ('checkbox', '复选框 (checkbox, 1/0)'),
-            ('hidden', '隐藏参数 (hidden)')
+            ('text', '单行文本 (text) - 通用文本输入'),
+            ('date', '日期选择 (date) - 格式 yyyy-MM-dd'),
+            ('datetime', '日期时间 (datetime) - 格式 yyyy-MM-dd HH:mm:ss'),
+            ('number', '数值输入 (number) - 仅限有效数字'),
+            ('select', '下拉选择框 (select) - 支持静态候选项与动态SQL'),
+            ('radio', '单选按钮组 (radio) - 候选项横向单选'),
+            ('textarea', '多行文本框 (textarea) - 适合较长输入'),
+            ('checkbox', '复选框 (checkbox) - 选中提交1，未选中提交0'),
+            ('hidden', '隐藏参数 (hidden) - 不可见，提交固定默认值')
         ]
         for val, desc in types:
             self.p_type_combo.addItem(desc, val)
+        self.p_type_combo.setToolTip("【控件类型】选择该参数在前端界面的展现形式")
         self.p_type_combo.currentIndexChanged.connect(self._on_param_type_changed)
         type_row.addWidget(self.p_type_combo, stretch=2)
 
         self.p_required_check = QCheckBox("必填项 (required)")
+        self.p_required_check.setToolTip("勾选后，若操作员未填入该条件则阻止执行查询")
         self.p_required_check.toggled.connect(self._save_current_param_details)
         type_row.addWidget(self.p_required_check)
 
         self.p_width_edit = QLineEdit()
-        self.p_width_edit.setPlaceholderText("宽度 (如 220px, 30%)")
+        self.p_width_edit.setPlaceholderText("宽度 (如 180px, 25%)")
+        self.p_width_edit.setToolTip("【控件宽度】支持像素（如 160px）或百分比（如 30%），留空为自适应")
         self.p_width_edit.textChanged.connect(self._save_current_param_details)
         type_row.addWidget(self.p_width_edit, stretch=1)
         p_form.addRow("控件类型/特性:", type_row)
@@ -464,16 +524,19 @@ class FormEditorDialog(QDialog):
         def_row = QHBoxLayout()
         self.p_default_edit = QLineEdit()
         self.p_default_edit.setPlaceholderText("默认填充值，日期可使用 {today}")
+        self.p_default_edit.setToolTip("【默认值】打开表单时的初始值。日期参数可直接输入 {today} 宏自动取当天日期")
         self.p_default_edit.textChanged.connect(self._save_current_param_details)
         def_row.addWidget(self.p_default_edit, stretch=1)
 
         btn_today = QPushButton("+ {today}")
+        btn_today.setStyleSheet("padding: 2px 8px; background: #E6F7FF; color: #0050B3; border: 1px solid #91D5FF; border-radius: 3px;")
         btn_today.setToolTip("快捷填入 {today} 动态当天宏")
         btn_today.clicked.connect(lambda: self.p_default_edit.setText("{today}"))
         def_row.addWidget(btn_today)
 
         self.p_placeholder_edit = QLineEdit()
-        self.p_placeholder_edit.setPlaceholderText("输入提示 (placeholder)")
+        self.p_placeholder_edit.setPlaceholderText("输入框内浅灰提示文字 (placeholder)")
+        self.p_placeholder_edit.setToolTip("【提示文字】输入框为空时显示的浅灰引导文本")
         self.p_placeholder_edit.textChanged.connect(self._save_current_param_details)
         def_row.addWidget(self.p_placeholder_edit, stretch=1)
         p_form.addRow("默认值/提示:", def_row)
@@ -482,15 +545,18 @@ class FormEditorDialog(QDialog):
         opt_row = QHBoxLayout()
         self.p_options_edit = QLineEdit()
         self.p_options_edit.setPlaceholderText("静态候选项（逗号分隔，如：全部,启用,禁用）")
+        self.p_options_edit.setToolTip("【静态候选项】以英文逗号分隔的固定列表。若同时配置了 options_sql，将以动态 SQL 结果为准")
         self.p_options_edit.textChanged.connect(self._save_current_param_details)
         opt_row.addWidget(self.p_options_edit, stretch=2)
 
         self.p_searchable_check = QCheckBox("可输入搜索")
         self.p_searchable_check.setChecked(True)
+        self.p_searchable_check.setToolTip("下拉框是否允许操作员直接键入关键词快速过滤选项")
         self.p_searchable_check.toggled.connect(self._save_current_param_details)
         opt_row.addWidget(self.p_searchable_check)
 
         self.p_allow_custom_check = QCheckBox("允许自定义输入")
+        self.p_allow_custom_check.setToolTip("是否允许操作员输入下拉候选列表中不存在的自由文本")
         self.p_allow_custom_check.toggled.connect(self._save_current_param_details)
         opt_row.addWidget(self.p_allow_custom_check)
         p_form.addRow("候选项配置:", opt_row)
@@ -498,8 +564,23 @@ class FormEditorDialog(QDialog):
         # 动态 SQL 候选项
         self.p_options_sql_edit = QLineEdit()
         self.p_options_sql_edit.setPlaceholderText("动态只读 SELECT 语句，返回一列为值，两列为 值,显示标签 (options_sql)")
+        self.p_options_sql_edit.setToolTip("【动态候选 SQL】执行只读 SELECT 查询，用于从数据库字典表中动态加载选项")
         self.p_options_sql_edit.textChanged.connect(self._save_current_param_details)
         p_form.addRow("动态候选 SQL:", self.p_options_sql_edit)
+
+        # options_sql 规范说明黄色提示框
+        sql_tip_box = QFrame()
+        sql_tip_box.setStyleSheet("QFrame { background-color: #FFFBE6; border: 1px solid #FFE58F; border-radius: 4px; padding: 4px; }")
+        st_layout = QVBoxLayout(sql_tip_box)
+        st_layout.setContentsMargins(8, 4, 8, 4)
+        st_layout.setSpacing(2)
+        st_t1 = QLabel("📌 <b>options_sql 规范</b>：仅允许单条只读 SELECT 语句，禁止多语句或分号；始终在默认主库执行。")
+        st_t1.setStyleSheet("color: #D48806; font-size: 11px;")
+        st_t2 = QLabel("• <b>返回 1 列</b>：该列既作为提交到 SQL 的入参值，也作为下拉显示的文字；<br>• <b>返回 2 列</b>：第 1 列作为提交值，第 2 列作为界面显示名称（如：<code>SELECT DeptCode, DeptName FROM Departments</code>）。")
+        st_t2.setStyleSheet("color: #8C6B00; font-size: 11px;")
+        st_layout.addWidget(st_t1)
+        st_layout.addWidget(st_t2)
+        p_form.addRow("", sql_tip_box)
 
         layout.addWidget(self.param_detail_group)
         return tab
@@ -511,6 +592,16 @@ class FormEditorDialog(QDialog):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
+        # 顶部操作指引横幅
+        blocks_banner = QFrame()
+        blocks_banner.setStyleSheet("QFrame { background-color: #F0F7FF; border: 1px solid #BAE0FF; border-radius: 6px; padding: 4px; }")
+        bb_layout = QHBoxLayout(blocks_banner)
+        bb_layout.setContentsMargins(10, 6, 10, 6)
+        bb_lbl = QLabel("💡 <b>多区块与排版指南</b>：支持多数据源与跨库报表！<b>table</b> 为明细数据表格（支持底部自动合计），<b>cards</b> 为顶部大字 KPI 指标卡。每个区块可独立连接不同数据库。")
+        bb_lbl.setStyleSheet("color: #0050B3; font-size: 11px;")
+        bb_layout.addWidget(bb_lbl)
+        layout.addWidget(blocks_banner)
+
         splitter = QSplitter(Qt.Vertical)
 
         # 上半部分：区块清单表格 + 新建按钮
@@ -521,15 +612,20 @@ class FormEditorDialog(QDialog):
         btn_bar = QHBoxLayout()
         self.block_add_table_btn = QPushButton("➕ 新增表格区块 (table)")
         self.block_add_table_btn.setStyleSheet("background-color: #0052CC; color: white; font-weight: bold; padding: 4px 10px;")
+        self.block_add_table_btn.setToolTip("添加一个明细数据表格区块，可独立配置数据源与底部合计行")
         self.block_add_table_btn.clicked.connect(self._on_block_add_table)
         self.block_add_cards_btn = QPushButton("➕ 新增指标卡 (cards)")
         self.block_add_cards_btn.setStyleSheet("background-color: #00875A; color: white; font-weight: bold; padding: 4px 10px;")
+        self.block_add_cards_btn.setToolTip("添加顶部 KPI 指标卡区块，查询返回的首行各字段将自动展示为突出大字卡片")
         self.block_add_cards_btn.clicked.connect(self._on_block_add_cards)
         self.block_del_btn = QPushButton("➖ 删除区块")
+        self.block_del_btn.setToolTip("删除当前选中的报表区块（表单必须至少保留一个区块）")
         self.block_del_btn.clicked.connect(self._on_block_delete)
         self.block_up_btn = QPushButton("⬆️ 上移")
+        self.block_up_btn.setToolTip("将选中区块向上移动一位")
         self.block_up_btn.clicked.connect(self._on_block_move_up)
         self.block_down_btn = QPushButton("⬇️ 下移")
+        self.block_down_btn.setToolTip("将选中区块向下移动一位")
         self.block_down_btn.clicked.connect(self._on_block_move_down)
 
         btn_bar.addWidget(self.block_add_table_btn)
@@ -570,12 +666,14 @@ class FormEditorDialog(QDialog):
         b_meta_row.addWidget(QLabel("区块标识:"))
         self.b_id_edit = QLineEdit()
         self.b_id_edit.setPlaceholderText("区块ID，如 main, summary, detail")
+        self.b_id_edit.setToolTip("【区块标识】唯一英文标识符，在 [meta] 的 layout 中可用于排版排序")
         self.b_id_edit.textChanged.connect(self._save_current_block_details)
         b_meta_row.addWidget(self.b_id_edit, stretch=1)
 
         b_meta_row.addWidget(QLabel("标题:"))
         self.b_title_edit = QLineEdit()
-        self.b_title_edit.setPlaceholderText("展示标题")
+        self.b_title_edit.setPlaceholderText("展示标题（如：体检人员明细表）")
+        self.b_title_edit.setToolTip("【展示标题】在客户端多Tab切换栏以及导出 Excel 对应工作表(Sheet)时使用的名称")
         self.b_title_edit.textChanged.connect(self._save_current_block_details)
         b_meta_row.addWidget(self.b_title_edit, stretch=2)
 
@@ -583,6 +681,7 @@ class FormEditorDialog(QDialog):
         self.b_type_combo = QComboBox()
         self.b_type_combo.addItem("table - 明细表格", "table")
         self.b_type_combo.addItem("cards - 指标汇总卡", "cards")
+        self.b_type_combo.setToolTip("【区块类型】\n• table: 展现为多行多列的数据表格，支持底部合计行；\n• cards: 展现为顶部大字 KPI 指标卡片。")
         self.b_type_combo.currentIndexChanged.connect(self._save_current_block_details)
         b_meta_row.addWidget(self.b_type_combo, stretch=1)
 
@@ -590,6 +689,7 @@ class FormEditorDialog(QDialog):
         self.b_ds_combo = QComboBox()
         self.b_ds_combo.setEditable(True)
         self._populate_datasources(self.b_ds_combo)
+        self.b_ds_combo.setToolTip("【独立数据源】该区块执行 SQL 所在的数据库连接。默认继承主库 default，可为不同区块指定不同库实现跨库报表")
         self.b_ds_combo.currentTextChanged.connect(self._save_current_block_details)
         b_meta_row.addWidget(self.b_ds_combo, stretch=1)
 
@@ -598,13 +698,15 @@ class FormEditorDialog(QDialog):
         b_meta_row2 = QHBoxLayout()
         b_meta_row2.addWidget(QLabel("合计规则:"))
         self.b_summary_edit = QLineEdit()
-        self.b_summary_edit.setPlaceholderText("auto 或 sum:实收金额; count:体检号")
+        self.b_summary_edit.setPlaceholderText("auto 或 sum:实收金额,人次; count:体检号; avg:均价")
+        self.b_summary_edit.setToolTip("【合计规则】\n• auto：自动识别数值列并累加求和，首列显示「合计 (N条)」；\n• 聚合格式：sum:金额,人次; count:单号; avg:客单价；\n• 留空：跟随表单基本信息中的默认合计规则。")
         self.b_summary_edit.textChanged.connect(self._save_current_block_details)
         b_meta_row2.addWidget(self.b_summary_edit, stretch=2)
 
         b_meta_row2.addWidget(QLabel("显示宽度:"))
         self.b_width_edit = QLineEdit()
         self.b_width_edit.setPlaceholderText("100% 或 50%")
+        self.b_width_edit.setToolTip("【显示宽度】在网页端或并排布局时的宽度占比，桌面端默认占满 100%")
         self.b_width_edit.textChanged.connect(self._save_current_block_details)
         b_meta_row2.addWidget(self.b_width_edit, stretch=1)
         bd_layout.addLayout(b_meta_row2)
@@ -647,7 +749,279 @@ class FormEditorDialog(QDialog):
         layout.addWidget(splitter)
         return tab
 
-    # ── Tab 3: 源码模式 (Raw .qry) ─────────────
+    # ── Tab 3: 效果预览 (Live Preview) ──────────
+    def _create_preview_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # 顶部提示条与手动刷新按钮
+        top_bar = QHBoxLayout()
+        tip_frame = QFrame()
+        tip_frame.setStyleSheet("background: #F0F7FF; border: 1px solid #BAE0FF; border-radius: 4px; padding: 2px;")
+        tf_layout = QHBoxLayout(tip_frame)
+        tf_layout.setContentsMargins(8, 4, 8, 4)
+        tip = QLabel("👀 <b>实时运行效果预览</b>（所见即所得：自动根据当前配置的条件、指标卡与区块渲染真实桌面端界面）")
+        tip.setStyleSheet("color: #0050B3; font-size: 11px;")
+        tf_layout.addWidget(tip)
+        top_bar.addWidget(tip_frame, stretch=1)
+
+        self.btn_refresh_preview = QPushButton("🔄 刷新预览")
+        self.btn_refresh_preview.setStyleSheet("background-color: #0052CC; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px;")
+        self.btn_refresh_preview.clicked.connect(self._refresh_live_preview)
+        top_bar.addWidget(self.btn_refresh_preview)
+        layout.addLayout(top_bar)
+
+        # 主滚动预览区
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        self.preview_container = QWidget()
+        self.preview_layout = QVBoxLayout(self.preview_container)
+        self.preview_layout.setContentsMargins(4, 4, 4, 4)
+        self.preview_layout.setSpacing(12)
+        scroll.setWidget(self.preview_container)
+        layout.addWidget(scroll, stretch=1)
+
+        return tab
+
+    def _refresh_live_preview(self):
+        """根据当前参数与区块配置，动态构建预览视图"""
+        # 清除现有控件
+        while self.preview_layout.count():
+            item = self.preview_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        # 1. 表单标题横幅
+        title_text = self.title_edit.text().strip() or (self.form.title if self.form else "未命名表单")
+        desc_text = self.desc_edit.text().strip() or "暂无表单描述"
+        header_frame = QFrame()
+        header_frame.setStyleSheet("background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; padding: 4px;")
+        h_layout = QVBoxLayout(header_frame)
+        h_layout.setContentsMargins(10, 8, 10, 8)
+        h_layout.setSpacing(2)
+        t_lbl = QLabel(f"📑 <b>{title_text}</b>")
+        t_lbl.setStyleSheet("font-size: 15px; color: #1E293B;")
+        d_lbl = QLabel(f"描述：{desc_text}  |  所属分组：{self.group_combo.currentText().strip() or '默认'}  |  主数据源：{self.datasource_combo.currentText().strip() or 'default'}")
+        d_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+        h_layout.addWidget(t_lbl)
+        h_layout.addWidget(d_lbl)
+        self.preview_layout.addWidget(header_frame)
+
+        # 2. 查询条件工具栏模拟
+        params_grp = QGroupBox("🔍 查询条件工具栏 (模拟可交互)")
+        p_vbox = QVBoxLayout(params_grp)
+        p_vbox.setContentsMargins(10, 8, 10, 8)
+        p_vbox.setSpacing(8)
+
+        if not self._params_data:
+            empty_lbl = QLabel("（尚未配置任何查询条件，操作员无需输入即可直接执行查询）")
+            empty_lbl.setStyleSheet("color: #94A3B8; font-style: italic; padding: 8px;")
+            p_vbox.addWidget(empty_lbl)
+        else:
+            p_grid_frame = QFrame()
+            p_grid_layout = QHBoxLayout(p_grid_frame)
+            p_grid_layout.setContentsMargins(0, 0, 0, 0)
+            p_grid_layout.setSpacing(12)
+
+            for p in self._params_data:
+                item_box = QVBoxLayout()
+                item_box.setSpacing(2)
+                lbl_text = p.label or p.name
+                if p.required:
+                    lbl_text += " <span style='color:red;'>*</span>"
+                l = QLabel(lbl_text)
+                l.setStyleSheet("font-size: 11px; color: #334155; font-weight: bold;")
+                item_box.addWidget(l)
+
+                ptype = p.ptype or 'text'
+                if ptype == 'date':
+                    dt = QDateEdit()
+                    dt.setCalendarPopup(True)
+                    dt.setDate(QDate.currentDate())
+                    dt.setMinimumWidth(110)
+                    item_box.addWidget(dt)
+                elif ptype == 'datetime':
+                    dtt = QDateTimeEdit()
+                    dtt.setCalendarPopup(True)
+                    dtt.setDateTime(QDateTime.currentDateTime())
+                    dtt.setMinimumWidth(150)
+                    item_box.addWidget(dtt)
+                elif ptype == 'select':
+                    cb = QComboBox()
+                    cb.setMinimumWidth(120)
+                    if p.options:
+                        cb.addItems(p.options)
+                    elif getattr(p, 'options_sql', ''):
+                        cb.addItem("（动态 SQL 加载项1）")
+                        cb.addItem("（动态 SQL 加载项2）")
+                    else:
+                        cb.addItem("请选择...")
+                    if getattr(p, 'allow_custom', False):
+                        cb.setEditable(True)
+                    item_box.addWidget(cb)
+                elif ptype == 'radio':
+                    r_frame = QFrame()
+                    r_layout = QHBoxLayout(r_frame)
+                    r_layout.setContentsMargins(0, 0, 0, 0)
+                    opts = p.options or ['选项A', '选项B']
+                    for opt in opts[:3]:
+                        rb = QRadioButton(opt)
+                        r_layout.addWidget(rb)
+                    if opts:
+                        first_rb = r_frame.findChild(QRadioButton)
+                        if first_rb:
+                            first_rb.setChecked(True)
+                    item_box.addWidget(r_frame)
+                elif ptype == 'checkbox':
+                    chk = QCheckBox("启用/勾选")
+                    chk.setChecked(p.default in ('1', 'true', 'True', True))
+                    item_box.addWidget(chk)
+                elif ptype == 'hidden':
+                    h_lbl = QLabel(f"(隐藏: {p.default or '空'})")
+                    h_lbl.setStyleSheet("color: #94A3B8; font-size: 11px;")
+                    item_box.addWidget(h_lbl)
+                else:
+                    le = QLineEdit()
+                    le.setPlaceholderText(p.placeholder or "请输入...")
+                    if p.default:
+                        le.setText(str(p.default))
+                    le.setMinimumWidth(110)
+                    item_box.addWidget(le)
+
+                p_grid_layout.addLayout(item_box)
+
+            p_grid_layout.addStretch()
+
+            # 操作按钮模拟
+            act_box = QVBoxLayout()
+            act_box.setSpacing(2)
+            act_lbl = QLabel("&nbsp;")
+            act_box.addWidget(act_lbl)
+            btn_row = QHBoxLayout()
+            btn_query = QPushButton("▶ 查询")
+            btn_query.setStyleSheet("background-color: #2563EB; color: white; font-weight: bold; padding: 4px 12px; border-radius: 3px;")
+            btn_export = QPushButton("📊 导出 Excel")
+            btn_export.setStyleSheet("background-color: #10B981; color: white; font-weight: bold; padding: 4px 10px; border-radius: 3px;")
+            btn_reset = QPushButton("↺ 重置")
+            btn_row.addWidget(btn_query)
+            btn_row.addWidget(btn_export)
+            btn_row.addWidget(btn_reset)
+            act_box.addLayout(btn_row)
+            p_grid_layout.addLayout(act_box)
+
+            p_vbox.addWidget(p_grid_frame)
+
+        self.preview_layout.addWidget(params_grp)
+
+        # 3. KPI 指标卡模拟 (若有 btype == 'cards' 的区块)
+        cards_blocks = [b for b in self._blocks_data if b.btype == 'cards']
+        if cards_blocks:
+            cards_grp = QGroupBox("📊 关键指标总览 (模拟 KPI 指标卡)")
+            c_vbox = QVBoxLayout(cards_grp)
+            c_vbox.setContentsMargins(10, 8, 10, 8)
+            cards_flow = QHBoxLayout()
+            cards_flow.setSpacing(12)
+
+            sample_cards = [
+                ("总登记人次", "1,580 人"),
+                ("体检实收总额", "¥ 328,600.00"),
+                ("平均单价", "¥ 207.97"),
+                ("完成率", "96.8%")
+            ]
+            for title, val in sample_cards:
+                c_box = QFrame()
+                c_box.setStyleSheet("background: #FFFFFF; border: 1px solid #CBD5E1; border-top: 3px solid #2563EB; border-radius: 6px; padding: 4px;")
+                c_lay = QVBoxLayout(c_box)
+                c_lay.setContentsMargins(14, 8, 14, 8)
+                c_lay.setSpacing(4)
+                t = QLabel(title)
+                t.setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold;")
+                v = QLabel(val)
+                v.setStyleSheet("color: #1E3A8A; font-size: 20px; font-weight: bold;")
+                c_lay.addWidget(t)
+                c_lay.addWidget(v)
+                cards_flow.addWidget(c_box)
+
+            cards_flow.addStretch()
+            c_vbox.addLayout(cards_flow)
+            self.preview_layout.addWidget(cards_grp)
+
+        # 4. 报表表格模拟
+        table_blocks = [b for b in self._blocks_data if b.btype != 'cards']
+        if not table_blocks:
+            table_blocks = [QueryBlock(block_id='main', title='主查询结果', btype='table')]
+
+        tables_grp = QGroupBox("📋 报表数据呈现 (模拟带合计行的数据表)")
+        tb_vbox = QVBoxLayout(tables_grp)
+        tb_vbox.setContentsMargins(10, 8, 10, 8)
+
+        if len(table_blocks) == 1:
+            b = table_blocks[0]
+            tb_vbox.addWidget(self._build_mock_table_widget(b))
+        else:
+            multi_tab = QTabWidget()
+            for b in table_blocks:
+                multi_tab.addTab(self._build_mock_table_widget(b), b.title or b.id)
+            tb_vbox.addWidget(multi_tab)
+
+        self.preview_layout.addWidget(tables_grp)
+        self.preview_layout.addStretch()
+
+    def _build_mock_table_widget(self, block):
+        container = QWidget()
+        c_layout = QVBoxLayout(container)
+        c_layout.setContentsMargins(0, 4, 0, 0)
+        c_layout.setSpacing(4)
+
+        info_row = QHBoxLayout()
+        ds_text = block.datasource or self.datasource_combo.currentText().strip() or 'default'
+        sum_text = block.summary_footer or self.meta_summary_edit.text().strip() or '未配置'
+        info_lbl = QLabel(f"🔌 数据源: <b>{ds_text}</b>  |  📐 合计规则: <b>{sum_text}</b>")
+        info_lbl.setStyleSheet("color: #475569; font-size: 11px;")
+        info_row.addWidget(info_lbl)
+        info_row.addStretch()
+        c_layout.addLayout(info_row)
+
+        table = QTableWidget()
+        cols = ["体检号", "姓名", "科室", "检查项目", "应收金额", "实收金额", "登记日期"]
+        table.setColumnCount(len(cols))
+        table.setHorizontalHeaderLabels(cols)
+        table.setRowCount(4)
+
+        mock_rows = [
+            ["TJ20260901", "张三", "内科", "入职常规体检", "350.00", "320.00", "2026-09-28"],
+            ["TJ20260902", "李四", "外科", "深度全套体检", "880.00", "850.00", "2026-09-28"],
+            ["TJ20260903", "王五", "妇科", "专项妇检套餐", "520.00", "500.00", "2026-09-28"],
+        ]
+        for r, rdata in enumerate(mock_rows):
+            for c, val in enumerate(rdata):
+                table.setItem(r, c, QTableWidgetItem(val))
+
+        # 合计行 (第 4 行)
+        sum_row_idx = 3
+        sum_items = ["∑ 合计 (3条)", "", "", "", "1,750.00", "1,670.00", ""]
+        for c, val in enumerate(sum_items):
+            item = QTableWidgetItem(val)
+            item.setBackground(QColor("#F1F5F9"))
+            f = item.font()
+            f.setBold(True)
+            item.setFont(f)
+            item.setForeground(QColor("#0F172A"))
+            if c in (4, 5):
+                item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            table.setItem(sum_row_idx, c, item)
+
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        table.setFixedHeight(145)
+        c_layout.addWidget(table)
+        return container
+
+    # ── Tab 4: 源码模式 (Raw .qry) ─────────────
     def _create_raw_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -678,7 +1052,472 @@ class FormEditorDialog(QDialog):
 
         return tab
 
-    # ── 数据源辅助填充 ─────────────────────────
+    # ── Tab 5: 使用说明与示例 (Docs & Templates) 
+    def _create_docs_tab(self):
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        # 左侧：主题目录导航
+        left_pane = QWidget()
+        lp_layout = QVBoxLayout(left_pane)
+        lp_layout.setContentsMargins(0, 0, 0, 0)
+        lp_layout.setSpacing(6)
+
+        title_lbl = QLabel("📖 <b>说明与模版导航</b>")
+        title_lbl.setStyleSheet("color: #0747A6; font-size: 13px;")
+        lp_layout.addWidget(title_lbl)
+
+        self.docs_list = QListWidget()
+        self.docs_list.setStyleSheet("""
+            QListWidget {
+                border: 1px solid #DFE1E6;
+                border-radius: 4px;
+                background-color: #FAFBFC;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 10px 8px;
+                border-bottom: 1px solid #EBECF0;
+                color: #172B4D;
+            }
+            QListWidget::item:selected {
+                background-color: #DEEBFF;
+                color: #0747A6;
+                font-weight: bold;
+            }
+        """)
+
+        topics = [
+            "🚀 快速入门 3 步走",
+            "🎛️ 9大查询控件说明",
+            "🔀 动态下拉 options_sql 规范",
+            "🔌 跨库多数据源配置说明",
+            "📊 指标卡 (cards) 与合计行",
+            "📑 模版一：单表综合统计 (常用)",
+            "📑 模版二：跨库多数据源报表",
+            "📑 模版三：KPI 经营看板驾驶舱"
+        ]
+        for t in topics:
+            self.docs_list.addItem(t)
+
+        lp_layout.addWidget(self.docs_list)
+        left_pane.setFixedWidth(230)
+        layout.addWidget(left_pane)
+
+        # 右侧：对应主题的详细图文内容与模版
+        self.docs_stack = QStackedWidget()
+
+        # 页面 0: 快速入门
+        self.docs_stack.addWidget(self._build_doc_intro())
+        # 页面 1: 9大控件说明
+        self.docs_stack.addWidget(self._build_doc_controls())
+        # 页面 2: options_sql 规范
+        self.docs_stack.addWidget(self._build_doc_options_sql())
+        # 页面 3: 跨库多数据源
+        self.docs_stack.addWidget(self._build_doc_multi_ds())
+        # 页面 4: 指标卡与合计行
+        self.docs_stack.addWidget(self._build_doc_cards_summary())
+        # 页面 5: 模版一
+        self.docs_stack.addWidget(self._build_template_page_1())
+        # 页面 6: 模版二
+        self.docs_stack.addWidget(self._build_template_page_2())
+        # 页面 7: 模版三
+        self.docs_stack.addWidget(self._build_template_page_3())
+
+        self.docs_list.currentRowChanged.connect(self.docs_stack.setCurrentIndex)
+        self.docs_list.setCurrentRow(0)
+
+        layout.addWidget(self.docs_stack, stretch=1)
+        return tab
+
+    def _copy_text_to_clipboard(self, text):
+        clipboard = QApplication.clipboard()
+        clipboard.setText(text.strip())
+        QMessageBox.information(self, "复制成功", "模版源码已成功复制到系统剪贴板！可在任意文本编辑器中粘贴使用。")
+
+    def _load_template_to_editor(self, tpl_content):
+        reply = QMessageBox.question(
+            self, "确认载入模版",
+            "载入示例模版将会替换当前编辑器中的全部内容。\n\n是否确认载入？",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.editor.setPlainText(tpl_content.strip())
+            self._sync_raw_to_visual()
+            self.tab_widget.setCurrentWidget(self.preview_tab)
+            QMessageBox.information(self, "载入成功", "示例模版已成功载入！已自动切换至「👀 效果预览」标签页查看真实呈现效果。")
+
+    def _build_doc_intro(self):
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(10, 0, 10, 0)
+        tb = QTextBrowser()
+        tb.setOpenExternalLinks(False)
+        tb.setHtml("""
+        <h2 style='color:#0747A6;'>🚀 报表开发 3 步快速上手</h2>
+        <p style='color:#555;'>DBQuery 系统采用声明式表单引擎（.qry 规范），让您无需编写任何前端界面代码，只需简单配置元数据、查询参数与 SQL 脚本，即可全自动生成美观专业的查询界面。</p>
+        <hr color='#E2E8F0'>
+        <h3 style='color:#1E293B;'>第一步：在「📋 基本信息」中设定表单属性</h3>
+        <ul>
+            <li><b>表单标题</b>：界面和导航树显示的中文名称（如：体检人员综合统计分析）；</li>
+            <li><b>所属分组</b>：选择或输入新分组名称（保存时系统自动创建文件夹分类归档）；</li>
+            <li><b>默认数据源</b>：默认连接主库 <code>default</code>；若需跨库，可在下拉框直接选择。</li>
+        </ul>
+        <h3 style='color:#1E293B;'>第二步：在「⚙️ 查询条件」中定义操作员输入项</h3>
+        <ul>
+            <li>点击 <b>➕ 添加参数</b> 按钮；</li>
+            <li>设置英文标识（如 <code>start_date</code>）和中文标签（如 <code>开始日期</code>）；</li>
+            <li>选择控件类型（单行文本、日期、下拉框、单选等），日期推荐设置默认值为 <code>{today}</code>。</li>
+        </ul>
+        <h3 style='color:#1E293B;'>第三步：在「📊 报表区块」中编写 SQL 脚本</h3>
+        <ul>
+            <li>在 SQL 语句中使用 <b>{参数名}</b> 接收用户输入（例如：<code>WHERE RegDate >= '{start_date}'</code>）；</li>
+            <li>可点击 SQL 框上方的快捷药丸按钮一键插入参数占位符；</li>
+            <li>配置合计规则（填写 <code>auto</code> 即可自动累加所有数字列求和）；</li>
+            <li>切换到「👀 效果预览」查看真实渲染，无误后点击右下角「保存」即可！</li>
+        </ul>
+        """)
+        l.addWidget(tb)
+        return page
+
+    def _build_doc_controls(self):
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(10, 0, 10, 0)
+        tb = QTextBrowser()
+        tb.setHtml("""
+        <h2 style='color:#0747A6;'>🎛️ 9大查询控件说明表</h2>
+        <table border='1' cellspacing='0' cellpadding='6' style='border-collapse:collapse; border-color:#CBD5E1; width:100%; font-size:12px;'>
+            <tr style='background-color:#F1F5F9; color:#0F172A;'>
+                <th>控件类型 (ptype)</th>
+                <th>展现形式</th>
+                <th>适用场景与默认值说明</th>
+            </tr>
+            <tr>
+                <td><b>text</b></td>
+                <td>单行文本输入框</td>
+                <td>适用于单号、姓名、手机号等关键字模糊或精确检索。</td>
+            </tr>
+            <tr>
+                <td><b>date</b></td>
+                <td>日期选择器 (yyyy-MM-dd)</td>
+                <td>选择具体日期；默认值支持填写 <code>{today}</code> 动态宏取当天。</td>
+            </tr>
+            <tr>
+                <td><b>datetime</b></td>
+                <td>日期时间选择器</td>
+                <td>精确到秒的开始与截止时间，格式：<code>yyyy-MM-dd HH:mm:ss</code>。</td>
+            </tr>
+            <tr>
+                <td><b>number</b></td>
+                <td>数值输入框</td>
+                <td>仅允许输入整数或浮点数字，如金额下限、年龄、数量等。</td>
+            </tr>
+            <tr>
+                <td><b>select</b></td>
+                <td>下拉单选选择框</td>
+                <td>支持静态列表（逗号分隔）或动态 <code>options_sql</code> 从字典表加载；支持输入拼音/文字检索。</td>
+            </tr>
+            <tr>
+                <td><b>radio</b></td>
+                <td>单选按钮组</td>
+                <td>选项数量较少（2~5个）时使用，如：男/女、有效/无效。</td>
+            </tr>
+            <tr>
+                <td><b>checkbox</b></td>
+                <td>复选勾选框</td>
+                <td>选中时提交 <code>1</code>，未选中时提交 <code>0</code>。</td>
+            </tr>
+            <tr>
+                <td><b>textarea</b></td>
+                <td>多行文本输入框</td>
+                <td>大段文本输入，如批量输入多个体检号（每行一个）。</td>
+            </tr>
+            <tr>
+                <td><b>hidden</b></td>
+                <td>隐藏参数（无界面）</td>
+                <td>用户不可见，但在 SQL 中提交固定的默认值（如系统编号等）。</td>
+            </tr>
+        </table>
+        """)
+        l.addWidget(tb)
+        return page
+
+    def _build_doc_options_sql(self):
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(10, 0, 10, 0)
+        tb = QTextBrowser()
+        tb.setHtml("""
+        <h2 style='color:#0747A6;'>🔀 动态下拉 options_sql 规范指南</h2>
+        <p style='color:#555;'>当需要在下拉框中展示来自数据库表的动态字典数据（如科室列表、开单医生、检查套餐等）时，使用 <code>options_sql</code> 属性。</p>
+        <hr color='#E2E8F0'>
+        <h3 style='color:#1E293B;'>一、返回列数规范（单列 vs 双列）</h3>
+        <ul>
+            <li><b>模式 1（单列）：值与显示相同</b><br>
+                <code>SELECT DeptName FROM Departments WHERE Active = 1 ORDER BY SortOrder</code><br>
+                下拉框中显示的文字即为提交到 SQL 的值。
+            </li>
+            <li style='margin-top:8px;'><b>模式 2（双列）：第1列为提交值，第2列为显示标签（强烈推荐）</b><br>
+                <code>SELECT DeptCode, DeptName FROM Departments WHERE Active = 1 ORDER BY SortOrder</code><br>
+                用户在界面看到的是 <code>DeptName</code>（如“内科门诊”），但最终传给 SQL <code>{dept}</code> 的是 <code>DeptCode</code>（如“D01”）。
+            </li>
+        </ul>
+        <h3 style='color:#1E293B;'>二、安全与执行约束</h3>
+        <ul>
+            <li>必须为<b>只读 SELECT</b> 语句，严禁 INSERT、UPDATE、DELETE、EXEC；</li>
+            <li>禁止在末尾加分号 <code>;</code>，严禁拼接多条 SQL 语句；</li>
+            <li><code>options_sql</code> 始终连接默认主库执行。</li>
+        </ul>
+        """)
+        l.addWidget(tb)
+        return page
+
+    def _build_doc_multi_ds(self):
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(10, 0, 10, 0)
+        tb = QTextBrowser()
+        tb.setHtml("""
+        <h2 style='color:#0747A6;'>🔌 跨库多数据源配置说明</h2>
+        <p style='color:#555;'>系统支持一个表单同时汇总展示来自不同数据库、甚至不同服务器的数据（例如：主库查询体检基本信息，检验库查询 LIS 报告结果，财务库查询收费明细）。</p>
+        <hr color='#E2E8F0'>
+        <h3 style='color:#1E293B;'>一、在 config.ini 中配置命名数据源</h3>
+        <pre style='background:#F8FAFC; border:1px solid #E2E8F0; padding:8px; border-radius:4px;'>
+[datasource.lis_db]
+name = 检验分库LIS
+server = 192.168.1.50
+port = 1433
+database = LisDb
+user = sa
+password = your_password
+db_type = mssql
+        </pre>
+        <h3 style='color:#1E293B;'>二、在表单中绑定数据源</h3>
+        <ul>
+            <li>在「基本信息」中，可设置整张表单的 <code>默认数据源</code>；</li>
+            <li>在「报表区块」中，每个区块都有独立的 <code>数据源</code> 下拉框。选择 <code>lis_db</code> 后，该区块将直连检验库执行查询；</li>
+            <li>客户端将同时并排或多 Tab 切换呈现各库结果，并支持一键导出到同一个 Excel 的不同工作表中！</li>
+        </ul>
+        """)
+        l.addWidget(tb)
+        return page
+
+    def _build_doc_cards_summary(self):
+        page = QWidget()
+        l = QVBoxLayout(page)
+        l.setContentsMargins(10, 0, 10, 0)
+        tb = QTextBrowser()
+        tb.setHtml("""
+        <h2 style='color:#0747A6;'>📊 指标卡 (cards) 与合计行 (summary_footer)</h2>
+        <hr color='#E2E8F0'>
+        <h3 style='color:#1E293B;'>一、顶部大字 KPI 指标卡 (type = cards)</h3>
+        <p>适合放置在报表顶部，突出展示核心总额、人次、均价等关键指标：</p>
+        <pre style='background:#F8FAFC; border:1px solid #E2E8F0; padding:8px; border-radius:4px;'>
+[block.kpi_cards]
+title = 核心关键指标
+type = cards
+datasource = default
+sql = SELECT COUNT(*) AS [总体检人次], SUM(PaidFee) AS [实收总额] FROM ExamRecords
+        </pre>
+        <p>系统自动将查询返回的<b>第一行数据的每个列名和数值</b>渲染为独立的大字 KPI 指标卡片；导出 Excel 时将自动在首个 Sheet「📊 指标总览」以大字卡片输出。</p>
+        <h3 style='color:#1E293B;'>二、数据表格底部置底合计行 (summary_footer)</h3>
+        <ul>
+            <li><b>规则 1：自动对所有数值列求和（最便捷）</b><br>
+                <code>summary_footer = auto</code><br>
+                表格底端置底显示合计行，首列显示“合计 (N条)”，所有数值列自动累加求和。
+            </li>
+            <li style='margin-top:8px;'><b>规则 2：按列名指定聚合函数</b><br>
+                <code>summary_footer = sum:实收金额,应收金额; count:体检号; avg:客单均价</code><br>
+                指定只有特定列参与计算，支持 <code>sum</code>、<code>count</code>、<code>avg</code> 等函数。
+            </li>
+        </ul>
+        """)
+        l.addWidget(tb)
+        return page
+
+    def _build_template_page_1(self):
+        content = u"""[meta]
+title = 体检人员综合统计
+group = 体检报表
+description = 包含日期区间、下拉科室筛选、人员明细及全表自动累加合计
+datasource = default
+query_type = select
+web_enabled = true
+summary_footer = auto
+
+[params]
+start_date = 开始日期 | date | {today} | required | width=150px
+end_date = 结束日期 | date | {today} | required | width=150px
+dept = 体检科室 | select:全部,内科,外科,五官科,妇科,检验科 | 全部 | searchable
+status = 登记状态 | radio:全部,已登记,已体检,已总检 | 全部
+keyword = 检索关键词 | text | | placeholder=输入姓名或体检号
+
+[block.main]
+title = 体检明细清单
+type = table
+datasource = default
+summary_footer = auto
+sql = 
+SELECT 
+    t.ExamNo AS [体检编号],
+    t.PatientName AS [姓名],
+    t.Gender AS [性别],
+    t.Age AS [年龄],
+    t.DeptName AS [体检科室],
+    t.TotalFee AS [应收金额],
+    t.PaidFee AS [实收金额],
+    t.Status AS [当前状态],
+    t.RegDate AS [登记时间]
+FROM ExamRecords t
+WHERE t.RegDate >= '{start_date} 00:00:00'
+  AND t.RegDate <= '{end_date} 23:59:59'
+  AND ('{dept}' = '全部' OR t.DeptName = '{dept}')
+  AND ('{status}' = '全部' OR t.Status = '{status}')
+  AND ('{keyword}' = '' OR t.PatientName LIKE '%{keyword}%' OR t.ExamNo LIKE '%{keyword}%')
+ORDER BY t.RegDate DESC
+"""
+        return self._create_template_widget("📑 模版一：单表综合统计 (最常用标准模版)",
+                                           "涵盖日期区间、下拉框、单选项、关键词检索、auto 自动合计等最常用业务场景。",
+                                           content)
+
+    def _build_template_page_2(self):
+        content = u"""[meta]
+title = 跨库综合就诊核对
+group = 综合核对
+description = 跨库查询：同时汇总 HIS 主库与 LIS 检验分库数据
+datasource = default
+web_enabled = true
+layout = his_info, lis_results
+
+[params]
+start_date = 统计日期 | date | {today} | required
+exam_no = 体检号/就诊号 | text | | placeholder=输入指定就诊号
+
+[block.his_info]
+title = HIS主库就诊信息
+type = table
+datasource = default
+summary_footer = sum:应收金额,实收金额
+sql = 
+SELECT 
+    h.PatientID AS [就诊号],
+    h.PatientName AS [姓名],
+    h.DoctorName AS [开单医生],
+    h.TotalFee AS [应收金额],
+    h.PaidFee AS [实收金额],
+    h.VisitDate AS [就诊时间]
+FROM HIS_Visits h
+WHERE h.VisitDate >= '{start_date}'
+  AND ('{exam_no}' = '' OR h.PatientID = '{exam_no}')
+
+[block.lis_results]
+title = LIS检验分库报告
+type = table
+datasource = lis_db
+summary_footer = count:标本号
+sql = 
+SELECT 
+    l.SampleNo AS [标本号],
+    l.PatientID AS [就诊号],
+    l.ItemName AS [检验项目],
+    l.ResultValue AS [检测结果],
+    l.RefRange AS [参考区间],
+    l.CheckTime AS [检验时间]
+FROM LIS_TestItems l
+WHERE l.CheckTime >= '{start_date}'
+  AND ('{exam_no}' = '' OR l.PatientID = '{exam_no}')
+"""
+        return self._create_template_widget("📑 模版二：跨库多数据源联合报表",
+                                           "通过不同区块绑定独立数据源，同时查询主库与分库数据并在客户端分页展示。",
+                                           content)
+
+    def _build_template_page_3(self):
+        content = u"""[meta]
+title = 运营经营看板
+group = 经营管理
+description = 顶部大字突出 KPI 指标卡，底部展示科室明细与自动合计
+datasource = default
+web_enabled = true
+layout = kpi_cards, dept_summary
+
+[params]
+start_date = 统计起始 | date | {today} | required
+end_date = 统计截止 | date | {today} | required
+
+[block.kpi_cards]
+title = 核心经营指标
+type = cards
+datasource = default
+sql = 
+SELECT 
+    COUNT(DISTINCT ExamNo) AS [总登记人数],
+    SUM(TotalFee) AS [应收总额],
+    SUM(PaidFee) AS [实收总额],
+    CAST(AVG(PaidFee) AS DECIMAL(10,2)) AS [客单价]
+FROM ExamRecords
+WHERE RegDate >= '{start_date}' AND RegDate <= '{end_date} 23:59:59'
+
+[block.dept_summary]
+title = 各科室明细汇总
+type = table
+datasource = default
+summary_footer = sum:人次,实收总额; avg:客单均价
+sql = 
+SELECT 
+    DeptName AS [科室名称],
+    COUNT(ExamNo) AS [人次],
+    SUM(PaidFee) AS [实收总额],
+    CAST(AVG(PaidFee) AS DECIMAL(10,2)) AS [客单均价]
+FROM ExamRecords
+WHERE RegDate >= '{start_date}' AND RegDate <= '{end_date} 23:59:59'
+GROUP BY DeptName
+ORDER BY SUM(PaidFee) DESC
+"""
+        return self._create_template_widget("📑 模版三：KPI 经营看板驾驶舱",
+                                           "顶部 cards 区块展示大字 KPI 指标卡，底部 table 区块展示明细报表与合计行。",
+                                           content)
+
+    def _create_template_widget(self, title, desc, qry_content):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 0, 10, 0)
+        v.setSpacing(6)
+
+        t_lbl = QLabel(f"<b>{title}</b>")
+        t_lbl.setStyleSheet("color: #0747A6; font-size: 13px;")
+        d_lbl = QLabel(desc)
+        d_lbl.setStyleSheet("color: #555; font-size: 11px;")
+        v.addWidget(t_lbl)
+        v.addWidget(d_lbl)
+
+        code_box = QPlainTextEdit()
+        mono_font = QFont("Courier New", 10)
+        mono_font.setStyleHint(QFont.TypeWriter)
+        code_box.setFont(mono_font)
+        code_box.setReadOnly(True)
+        code_box.setPlainText(qry_content.strip())
+        code_box.setStyleSheet("background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 4px;")
+        QryHighlighter(code_box.document())
+        v.addWidget(code_box, stretch=1)
+
+        b_row = QHBoxLayout()
+        btn_copy = QPushButton("📋 复制模版源码")
+        btn_copy.setStyleSheet("background-color: #F4F5F7; color: #172B4D; font-weight: bold; padding: 4px 12px; border: 1px solid #DFE1E6; border-radius: 4px;")
+        btn_copy.clicked.connect(lambda: self._copy_text_to_clipboard(qry_content))
+
+        btn_load = QPushButton("📥 载入此模版到设计器")
+        btn_load.setStyleSheet("background-color: #0052CC; color: white; font-weight: bold; padding: 4px 14px; border-radius: 4px;")
+        btn_load.clicked.connect(lambda: self._load_template_to_editor(qry_content))
+
+        b_row.addWidget(btn_copy)
+        b_row.addWidget(btn_load)
+        b_row.addStretch()
+        v.addLayout(b_row)
+
+        return w
     def _populate_datasources(self, combo):
         combo.clear()
         combo.addItem("default (默认主库)", "default")
@@ -1004,15 +1843,26 @@ class FormEditorDialog(QDialog):
         if self._syncing:
             return
 
-        # 从源码模式切出到可视化模式
-        if self._prev_tab_index == 3 and new_index != 3:
-            self._sync_raw_to_visual()
-        # 从可视化模式切入源码模式
-        elif self._prev_tab_index in (0, 1, 2) and new_index == 3:
-            self._sync_visual_to_raw()
+        current_widget = self.tab_widget.widget(new_index)
+        prev_widget = self.tab_widget.widget(self._prev_tab_index) if hasattr(self, '_prev_tab_index') and 0 <= self._prev_tab_index < self.tab_widget.count() else None
 
-        if new_index == 2:
+        # 无论从哪个可视化Tab切出，先保存当前选中的参数和区块细节
+        if prev_widget in (self.meta_tab, self.params_tab, self.blocks_tab):
+            self._save_current_param_details()
+            self._save_current_block_details()
+
+        # 从源码模式切出到其他Tab
+        if prev_widget == self.raw_tab and current_widget != self.raw_tab:
+            self._sync_raw_to_visual()
+        # 切入源码模式
+        elif current_widget == self.raw_tab:
+            self._sync_visual_to_raw()
+        # 切入区块排版
+        elif current_widget == self.blocks_tab:
             self._refresh_quick_param_buttons()
+        # 切入效果预览
+        elif current_widget == self.preview_tab:
+            self._refresh_live_preview()
 
         self._prev_tab_index = new_index
 
@@ -1307,7 +2157,7 @@ class FormEditorDialog(QDialog):
         返回 (is_valid: bool, errors: list[str], warnings: list[str])
         """
         if content is None:
-            if hasattr(self, 'tab_widget') and self.tab_widget.currentIndex() != 3:
+            if hasattr(self, 'tab_widget') and hasattr(self, 'raw_tab') and self.tab_widget.currentWidget() != self.raw_tab:
                 self._sync_visual_to_raw()
             content = self.editor.toPlainText()
 
@@ -1474,7 +2324,7 @@ class FormEditorDialog(QDialog):
 
     def _on_validate_clicked(self):
         """单独执行表单校验并弹窗展示结果"""
-        if hasattr(self, 'tab_widget') and self.tab_widget.currentIndex() != 3:
+        if hasattr(self, 'tab_widget') and hasattr(self, 'raw_tab') and self.tab_widget.currentWidget() != self.raw_tab:
             self._sync_visual_to_raw()
 
         is_valid, errors, warnings = self.validate_form()
@@ -1637,7 +2487,7 @@ class FormEditorDialog(QDialog):
             return False
 
     def _save(self):
-        if hasattr(self, 'tab_widget') and self.tab_widget.currentIndex() != 3:
+        if hasattr(self, 'tab_widget') and hasattr(self, 'raw_tab') and self.tab_widget.currentWidget() != self.raw_tab:
             self._sync_visual_to_raw()
 
         if self.validate_on_save_check.isChecked():
@@ -1667,7 +2517,7 @@ class FormEditorDialog(QDialog):
             self.accept()
 
     def _save_as(self):
-        if hasattr(self, 'tab_widget') and self.tab_widget.currentIndex() != 3:
+        if hasattr(self, 'tab_widget') and hasattr(self, 'raw_tab') and self.tab_widget.currentWidget() != self.raw_tab:
             self._sync_visual_to_raw()
 
         if self.validate_on_save_check.isChecked():

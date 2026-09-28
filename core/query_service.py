@@ -194,13 +194,82 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
         except Exception:
             pass
 
+    def _write_cards_sheet(target_ws, sheet_title, cards_list):
+        try:
+            target_ws.views.sheetView[0].showGridLines = True
+        except Exception:
+            pass
+        banner_fill = PatternFill("solid", fgColor="1A6EB5")
+        banner_font = Font(color="FFFFFF", bold=True, name="微软雅黑", size=13)
+        target_ws.merge_cells("A1:D1")
+        top_cell = target_ws.cell(row=1, column=1, value=u"📊 " + sheet_title)
+        top_cell.fill = banner_fill
+        top_cell.font = banner_font
+        top_cell.alignment = Alignment(horizontal='center', vertical='center')
+        target_ws.row_dimensions[1].height = 36
+
+        # Headers: 序号, 指标名称, 统计数值, 原始值
+        hdr_fill = PatternFill("solid", fgColor="E6F2FF")
+        hdr_font = Font(color="1A6EB5", bold=True, name="微软雅黑", size=10)
+        target_ws.cell(row=3, column=1, value=u"序号").fill = hdr_fill
+        target_ws.cell(row=3, column=2, value=u"指标名称").fill = hdr_fill
+        target_ws.cell(row=3, column=3, value=u"统计数值 (格式化)").fill = hdr_fill
+        target_ws.cell(row=3, column=4, value=u"原始数值").fill = hdr_fill
+        for ci in range(1, 5):
+            c = target_ws.cell(row=3, column=ci)
+            c.font = hdr_font
+            c.border = border
+            c.alignment = center
+        target_ws.row_dimensions[3].height = 24
+
+        val_font = Font(color="0F172A", bold=True, name="微软雅黑", size=11)
+        for idx, card in enumerate(cards_list, 1):
+            ri = 3 + idx
+            target_ws.row_dimensions[ri].height = 26
+            c1 = target_ws.cell(row=ri, column=1, value=idx)
+            c2 = target_ws.cell(row=ri, column=2, value=card.get('title', ''))
+            c3 = target_ws.cell(row=ri, column=3, value=card.get('formatted', ''))
+            c4 = target_ws.cell(row=ri, column=4, value=card.get('raw', ''))
+            for c in (c1, c2, c3, c4):
+                c.border = border
+                c.alignment = vcenter
+            c1.alignment = center
+            c3.font = val_font
+            c3.alignment = Alignment(horizontal='right', vertical='center')
+            if ri % 2 == 0:
+                c1.fill = even_fill
+                c2.fill = even_fill
+                c3.fill = even_fill
+                c4.fill = even_fill
+
+        target_ws.column_dimensions['A'].width = 8
+        target_ws.column_dimensions['B'].width = 24
+        target_ws.column_dimensions['C'].width = 24
+        target_ws.column_dimensions['D'].width = 18
+
     _write_table_sheet(ws, columns, rows, summary_row)
 
-    # 若有多表格区块，追加各自的工作表
+    # 若有多区块（表格或指标卡片），追加各自的工作表
+    cards_summary_items = []
     if blocks:
         existing_titles = {ws.title}
         for b in blocks:
-            if b.get('type') == 'table' and b.get('columns'):
+            if b.get('type') == 'cards':
+                c_list = b.get('cards') or []
+                if not c_list and b.get('columns') and b.get('rows'):
+                    from core.summary_service import compute_cards
+                    c_list = compute_cards(b.get('columns'), b.get('rows'))
+                if c_list:
+                    for c in c_list:
+                        cards_summary_items.append((c.get('title', ''), str(c.get('formatted', ''))))
+                    b_title = (b.get('title') or b.get('id') or u'指标总览').strip()
+                    invalid_chars = set(r'[]:*?/') | {'\\'}
+                    safe_title = ''.join(c for c in b_title if c not in invalid_chars)[:30]
+                    if safe_title not in existing_titles:
+                        existing_titles.add(safe_title)
+                        cards_ws = wb.create_sheet(title=safe_title)
+                        _write_cards_sheet(cards_ws, safe_title, c_list)
+            elif b.get('type') == 'table' and b.get('columns'):
                 b_title = (b.get('title') or b.get('id') or u'表格').strip()
                 # openpyxl 表名最长 31 字符且不可包含某些特殊字符
                 invalid_chars = set(r'[]:*?/') | {'\\'}
@@ -224,11 +293,10 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
         (u"—— 查询条件 ——", ''),
     ]
     info_rows += params_info
-    # info_rows += [
-    #     ('', ''),
-    #     (u"—— SQL 语句 ——", ''),
-    #     (final_sql, ''),
-    # ]
+    if cards_summary_items:
+        info_rows += [('', ''), (u"—— 核心指标汇总 ——", '')]
+        info_rows += cards_summary_items
+
     for r_idx, (k, v) in enumerate(info_rows, 1):
         ws2.cell(row=r_idx, column=1, value=k)
         if v != '':

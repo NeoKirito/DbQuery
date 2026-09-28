@@ -34,7 +34,7 @@ class TestVisualFormEditor(unittest.TestCase):
         """测试新建表单时，可视化设计器默认状态与基础属性"""
         dlg = FormEditorDialog(None, self.forms_dir, default_group='综合分析')
         self.assertEqual(dlg.group_combo.currentText(), '综合分析')
-        self.assertEqual(dlg.tab_widget.count(), 4)
+        self.assertEqual(dlg.tab_widget.count(), 6)
         self.assertEqual(dlg.query_type_combo.currentData(), 'select')
         self.assertFalse(dlg.web_enabled_check.isChecked())
         # 默认应有初始 params 和 blocks
@@ -229,6 +229,65 @@ class TestVisualFormEditor(unittest.TestCase):
         self.assertEqual(len(saved_form.blocks), 2)
         self.assertEqual(saved_form.blocks[0].id, 'kpi')
         self.assertEqual(saved_form.blocks[1].id, 'list')
+
+        dlg.close()
+
+    def test_live_preview_refresh(self):
+        """测试切换至效果预览 Tab 时，自动动态生成模拟控件与表格"""
+        dlg = FormEditorDialog(None, self.forms_dir, default_group='综合分析')
+        dlg._params_data = [
+            QueryParam(name='start_date', label='起始日期', ptype='date', default='{today}', required=True),
+            QueryParam(name='dept', label='科室', ptype='select', options=['内科', '外科']),
+            QueryParam(name='status', label='状态', ptype='radio', options=['正常', '注销'])
+        ]
+        dlg._blocks_data = [
+            QueryBlock(block_id='kpi', title='总览指标', btype='cards', sql="SELECT 100 AS 人数"),
+            QueryBlock(block_id='list', title='明细数据', btype='table', summary_footer='auto', sql="SELECT * FROM Test")
+        ]
+
+        # 切换到 Tab 3 效果预览
+        dlg.tab_widget.setCurrentWidget(dlg.preview_tab)
+        # 触发刷新
+        dlg._refresh_live_preview()
+
+        # 检查 preview_layout 中包含的组件
+        self.assertGreater(dlg.preview_layout.count(), 0)
+        # 验证预览容器中含有模拟参数组、模拟指标卡组、模拟表格组
+        group_boxes = dlg.preview_container.findChildren(type(dlg.pv_table_find if hasattr(dlg, 'pv_table_find') else dlg.param_detail_group))
+        self.assertGreaterEqual(len(group_boxes), 2)
+        dlg.close()
+
+    def test_docs_tab_and_template_loading(self):
+        """测试使用说明与示例 Tab 导航、模版列表及一键载入至编辑器"""
+        dlg = FormEditorDialog(None, self.forms_dir, default_group='综合分析')
+        self.assertIsNotNone(dlg.docs_tab)
+        self.assertEqual(dlg.docs_list.count(), 8)
+        self.assertEqual(dlg.docs_stack.count(), 8)
+
+        # 切换到模版三页面 (索引 7)
+        dlg.docs_list.setCurrentRow(7)
+        self.assertEqual(dlg.docs_stack.currentIndex(), 7)
+
+        # 测试直接载入模版一
+        tpl_1 = dlg._build_template_page_1()
+        self.assertIsNotNone(tpl_1)
+
+        # 直接测试静默载入函数的核心逻辑（不弹出对话框）
+        test_qry = (
+            "[meta]\n"
+            "title = 测试模版载入\n"
+            "group = 综合分析\n"
+            "[params]\n"
+            "k = 键 | text\n"
+            "[block.main]\n"
+            "title = 明细\n"
+            "sql = SELECT 1\n"
+        )
+        dlg.editor.setPlainText(test_qry)
+        dlg._sync_raw_to_visual()
+        self.assertEqual(dlg.title_edit.text(), '测试模版载入')
+        self.assertEqual(len(dlg._params_data), 1)
+        self.assertEqual(dlg._params_data[0].name, 'k')
 
         dlg.close()
 

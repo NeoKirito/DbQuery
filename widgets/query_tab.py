@@ -839,16 +839,16 @@ class QueryTab(QWidget):
             for card in cards_found:
                 card_box = QFrame()
                 card_box.setStyleSheet(
-                    "QFrame { background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; }"
+                    "QFrame { background: #FFFFFF; border: 1px solid #CBD5E1; border-top: 3px solid #2563EB; border-radius: 6px; padding: 2px; }"
                 )
                 c_layout = QVBoxLayout(card_box)
-                c_layout.setContentsMargins(12, 8, 12, 8)
+                c_layout.setContentsMargins(14, 10, 14, 10)
                 c_layout.setSpacing(4)
 
                 t_lbl = QLabel(card['title'])
                 t_lbl.setStyleSheet("color: #64748B; font-size: 11px; font-weight: bold;")
                 v_lbl = QLabel(card['formatted'])
-                v_lbl.setStyleSheet("color: #1D4ED8; font-size: 18px; font-weight: bold;")
+                v_lbl.setStyleSheet("color: #1E3A8A; font-size: 20px; font-weight: bold;")
 
                 c_layout.addWidget(t_lbl)
                 c_layout.addWidget(v_lbl)
@@ -893,16 +893,10 @@ class QueryTab(QWidget):
         if not hasattr(self, '_table_blocks') or index < 0 or index >= len(self._table_blocks):
             return
         b, b_data = self._table_blocks[index]
-        self._on_query_done(b_data['columns'], b_data['rows'])
         b_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
-        if b_spec and hasattr(self, 'table_view') and self.table_view.model():
-            current_model = self.table_view.model()
-            if isinstance(current_model, ResultTableModel):
-                current_model._summary_spec = b_spec
-                current_model._recompute_summary()
-                current_model.layoutChanged.emit()
+        self._on_query_done(b_data['columns'], b_data['rows'], summary_spec=b_spec)
 
-    def _on_query_done(self, columns, rows):
+    def _on_query_done(self, columns, rows, summary_spec=None):
         logger.info("_on_query_done called, columns=%s, rows=%d", columns, len(rows))
         self._cancel_worker()
 
@@ -931,8 +925,8 @@ class QueryTab(QWidget):
                 return
 
             logger.info("Creating ResultTableModel")
-            summary_spec = getattr(self.form, 'summary_footer', '')
-            model = ResultTableModel(columns, rows, summary_spec=summary_spec)
+            spec = summary_spec if summary_spec is not None else getattr(self.form, 'summary_footer', '')
+            model = ResultTableModel(columns, rows, summary_spec=spec)
             # 暂时不使用代理模型，直接使用源模型
             logger.info("Setting table model (direct)")
             self.table_view.setModel(model)
@@ -1043,13 +1037,37 @@ class QueryTab(QWidget):
         if getattr(self, '_last_blocks_results', None):
             for b_id, b_data in self._last_blocks_results.items():
                 b = b_data.get('block')
-                if b and b.btype == 'table' and b_data.get('columns'):
+                if not b:
+                    continue
+                if b.btype == 'table' and b_data.get('columns'):
+                    b_summary_spec = b.summary_footer or getattr(self.form, 'summary_footer', '')
+                    b_summary_row = None
+                    if b_summary_spec:
+                        try:
+                            from core.summary_service import compute_summary
+                            b_summary_row, _ = compute_summary(b_data.get('columns', []), b_data.get('rows', []), b_summary_spec)
+                        except Exception:
+                            pass
                     blocks_for_export.append({
-                        'title': b.title,
+                        'title': b.title or b.id,
                         'columns': b_data.get('columns', []),
                         'rows': b_data.get('rows', []),
-                        'summary_row': b_data.get('summary_row'),
+                        'summary_row': b_summary_row,
                         'type': 'table'
+                    })
+                elif b.btype == 'cards' and b_data.get('columns'):
+                    c_list = []
+                    try:
+                        from core.summary_service import compute_cards
+                        c_list = compute_cards(b_data.get('columns', []), b_data.get('rows', []))
+                    except Exception:
+                        pass
+                    blocks_for_export.append({
+                        'title': b.title or b.id or u'关键指标',
+                        'type': 'cards',
+                        'cards': c_list,
+                        'columns': b_data.get('columns', []),
+                        'rows': b_data.get('rows', [])
                     })
 
         try:
