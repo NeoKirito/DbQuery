@@ -116,6 +116,7 @@ a = Analysis(
         'core.logger',
         'core.sql_safety',
         'core.param_service',
+        'core.summary_service',
         'web_server',
         'main',
     ],
