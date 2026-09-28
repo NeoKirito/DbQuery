@@ -302,6 +302,36 @@ class TestExportToExcelWithSummaryAndBlocks(unittest.TestCase):
             if os.path.exists(tf.name):
                 os.remove(tf.name)
 
+    def test_export_no_duplicate_query_result_sheet_when_all_blocks_provided(self):
+        from core.query_service import export_to_excel
+        import openpyxl
+
+        tf = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        tf.close()
+        try:
+            main_cols = ['科室名称', '人次']
+            main_rows = [['内科', 10]]
+            blocks = [
+                {'title': '运营核心指标', 'type': 'cards', 'cards': [{'title': '登记人次', 'formatted': '10', 'raw': 10}]},
+                {'title': '各科室汇总', 'type': 'table', 'columns': main_cols, 'rows': main_rows, 'summary_row': ['合计 (1条)', 10]},
+                {'title': '人员明细清单', 'type': 'table', 'columns': ['编号', '姓名'], 'rows': [['001', '张三']]}
+            ]
+            export_to_excel(
+                tf.name,
+                columns=main_cols,
+                rows=main_rows,
+                form_title='测试多源表单',
+                summary_row=['合计 (1条)', 10],
+                blocks=blocks
+            )
+            wb = openpyxl.load_workbook(tf.name)
+            # 应当不包含重复的 '查询结果'，且顺序为：运营核心指标, 各科室汇总, 人员明细清单, 查询信息
+            self.assertNotIn('查询结果', wb.sheetnames)
+            self.assertEqual(wb.sheetnames, ['运营核心指标', '各科室汇总', '人员明细清单', '查询信息'])
+        finally:
+            if os.path.exists(tf.name):
+                os.remove(tf.name)
+
 
 class TestSampleFormParsing(unittest.TestCase):
     def test_sample_form_loads(self):

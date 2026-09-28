@@ -128,11 +128,22 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
 
     wb = openpyxl.Workbook()
 
-    # ── Sheet1: 查询结果 ──
+    # 判定当前主查询结果 (columns) 是否已作为命名区块包含在 blocks 中
+    main_already_in_blocks = False
+    if blocks:
+        for b in blocks:
+            if b.get('type') == 'table' and b.get('columns') == columns:
+                main_already_in_blocks = True
+                break
+
+    # ── Sheet1: 查询结果（仅在非多区块或主表未在区块中重复定义时创建）──
     ws = wb.active
     if ws is None:
         ws = wb.create_sheet()
-    ws.title = u"查询结果"
+    first_ws_used = False
+    if not main_already_in_blocks:
+        ws.title = u"查询结果"
+        first_ws_used = True
 
     hdr_fill  = PatternFill("solid", fgColor="1A6EB5")
     hdr_font  = Font(color="FFFFFF", bold=True, name="微软雅黑", size=10)
@@ -332,12 +343,13 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
             col_letter = get_column_letter(col_idx)
             target_ws.column_dimensions[col_letter].width = 16
 
-    _write_table_sheet(ws, columns, rows, summary_row)
+    if not main_already_in_blocks:
+        _write_table_sheet(ws, columns, rows, summary_row)
 
     # 若有多区块（表格或指标卡片），追加各自的工作表
     cards_summary_items = []
     if blocks:
-        existing_titles = {ws.title}
+        existing_titles = {ws.title} if first_ws_used else set()
         for b in blocks:
             if b.get('type') == 'cards':
                 c_list = b.get('cards') or []
@@ -352,7 +364,12 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
                     safe_title = ''.join(c for c in b_title if c not in invalid_chars)[:30]
                     if safe_title not in existing_titles:
                         existing_titles.add(safe_title)
-                        cards_ws = wb.create_sheet(title=safe_title)
+                        if not first_ws_used:
+                            cards_ws = ws
+                            cards_ws.title = safe_title
+                            first_ws_used = True
+                        else:
+                            cards_ws = wb.create_sheet(title=safe_title)
                         _write_cards_sheet(cards_ws, safe_title, c_list)
             elif b.get('type') == 'table' and b.get('columns'):
                 b_title = (b.get('title') or b.get('id') or u'表格').strip()
@@ -362,7 +379,12 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
                 if safe_title in existing_titles:
                     continue
                 existing_titles.add(safe_title)
-                b_ws = wb.create_sheet(title=safe_title)
+                if not first_ws_used:
+                    b_ws = ws
+                    b_ws.title = safe_title
+                    first_ws_used = True
+                else:
+                    b_ws = wb.create_sheet(title=safe_title)
                 _write_table_sheet(b_ws, b['columns'], b.get('rows', []), b.get('summary_row'))
 
     # ── Sheet2: 查询信息 ──
