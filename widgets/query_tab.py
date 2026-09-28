@@ -472,10 +472,10 @@ class QueryTab(QWidget):
         self.cards_frame = QFrame()
         self.cards_frame.setObjectName("cards_container")
         self.cards_frame.setStyleSheet(
-            "QFrame#cards_container { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; }"
+            "QFrame#cards_container { background: transparent; border: none; }"
         )
         self.cards_layout = QHBoxLayout(self.cards_frame)
-        self.cards_layout.setContentsMargins(12, 10, 12, 10)
+        self.cards_layout.setContentsMargins(0, 4, 0, 4)
         self.cards_layout.setSpacing(14)
         self.cards_frame.hide()
         root.addWidget(self.cards_frame)
@@ -860,50 +860,46 @@ class QueryTab(QWidget):
                 w.deleteLater()
 
         if cards_found:
-            # 丰富优雅的多彩商务主题配色
+            # 丰富优雅的多彩商务主题配色（数值强调色）
             palette = [
-                {"top": "#2563EB", "num": "#1E3A8A", "bg": "#FFFFFF", "icon": "📊"},
-                {"top": "#059669", "num": "#065F46", "bg": "#FFFFFF", "icon": "📈"},
-                {"top": "#D97706", "num": "#92400E", "bg": "#FFFFFF", "icon": "🎯"},
-                {"top": "#7C3AED", "num": "#5B21B6", "bg": "#FFFFFF", "icon": "💎"},
-                {"top": "#0891B2", "num": "#155E75", "bg": "#FFFFFF", "icon": "💡"},
+                {"num": "#1E40AF"},  # 经典深蓝
+                {"num": "#065F46"},  # 翡翠墨绿
+                {"num": "#92400E"},  # 暖色琥珀
+                {"num": "#5B21B6"},  # 典雅高贵紫
+                {"num": "#0E7490"},  # 商务青蓝
             ]
             for idx, card in enumerate(cards_found):
                 theme = palette[idx % len(palette)]
                 card_box = QFrame()
+                card_box.setObjectName("kpiCard")
                 card_box.setMinimumWidth(150)
                 card_box.setMaximumWidth(280)
-                card_box.setStyleSheet(
-                    "QFrame {"
-                    "  background: " + theme['bg'] + ";"
-                    "  border: 1px solid #E2E8F0;"
-                    "  border-top: 3px solid " + theme['top'] + ";"
-                    "  border-radius: 8px;"
-                    "}"
-                    "QFrame:hover {"
-                    "  border-color: #CBD5E1;"
-                    "  border-top: 3px solid " + theme['top'] + ";"
-                    "  background: #FFFFFF;"
-                    "}"
-                )
+                card_box.setStyleSheet("""
+                    QFrame#kpiCard {
+                        background-color: #FFFFFF;
+                        border: 1px solid #E2E8F0;
+                        border-radius: 8px;
+                    }
+                    QFrame#kpiCard:hover {
+                        border-color: #CBD5E1;
+                        background-color: #FFFFFF;
+                    }
+                    QLabel {
+                        border: none;
+                        background: transparent;
+                    }
+                """)
                 c_layout = QVBoxLayout(card_box)
-                c_layout.setContentsMargins(14, 10, 14, 10)
+                c_layout.setContentsMargins(16, 12, 16, 12)
                 c_layout.setSpacing(6)
 
-                t_row = QHBoxLayout()
-                t_row.setSpacing(6)
-                icn_lbl = QLabel(theme['icon'])
-                icn_lbl.setStyleSheet("font-size: 11px;")
                 t_lbl = QLabel(card['title'])
-                t_lbl.setStyleSheet("color: #64748B; font-size: 12px; font-weight: bold;")
-                t_row.addWidget(icn_lbl)
-                t_row.addWidget(t_lbl)
-                t_row.addStretch()
+                t_lbl.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;")
 
                 v_lbl = QLabel(card['formatted'])
-                v_lbl.setStyleSheet("color: " + theme['num'] + "; font-size: 22px; font-weight: bold; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;")
+                v_lbl.setStyleSheet("color: " + theme['num'] + "; font-size: 22px; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, 'Microsoft YaHei', sans-serif;")
 
-                c_layout.addLayout(t_row)
+                c_layout.addWidget(t_lbl)
                 c_layout.addWidget(v_lbl)
                 self.cards_layout.addWidget(card_box)
             self.cards_layout.addStretch()

@@ -254,12 +254,14 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
 
         # 2. 像页面一样渲染【并排大字 KPI 视觉卡片】！
         card_colors = [
-            {"top": "2563EB", "val": "1E3A8A", "bg": "F8FAFC", "icon": "📊"},
-            {"top": "059669", "val": "065F46", "bg": "F8FAFC", "icon": "📈"},
-            {"top": "D97706", "val": "92400E", "bg": "F8FAFC", "icon": "🎯"},
-            {"top": "7C3AED", "val": "5B21B6", "bg": "F8FAFC", "icon": "💎"},
-            {"top": "0891B2", "val": "155E75", "bg": "F8FAFC", "icon": "💡"},
+            {"val": "1E40AF"},  # 经典深蓝
+            {"val": "065F46"},  # 翡翠墨绿
+            {"val": "92400E"},  # 暖色琥珀
+            {"val": "5B21B6"},  # 典雅高贵紫
+            {"val": "0E7490"},  # 商务青蓝
         ]
+
+        t_side_thin = Side(style='thin', color='CBD5E1')
 
         # 每 4 个卡片一行，每个卡片占 2 列
         for idx, card in enumerate(cards_list):
@@ -272,14 +274,12 @@ def export_to_excel(path, columns, rows, form_title='', form_desc='',
 
             # 卡片标题行 (c_row)
             target_ws.merge_cells("{}{}:{}{}".format(col_a, c_row, col_b, c_row))
-            t_cell = target_ws.cell(row=c_row, column=c_col, value=u"{} {}".format(theme['icon'], card.get('title', '')))
-            t_cell.fill = PatternFill("solid", fgColor=theme['bg'])
+            t_cell = target_ws.cell(row=c_row, column=c_col, value=card.get('title', ''))
+            t_cell.fill = PatternFill("solid", fgColor="F8FAFC")
             t_cell.font = Font(color="64748B", bold=True, name="微软雅黑", size=10)
             t_cell.alignment = Alignment(horizontal='center', vertical='center')
-            t_side_top = Side(style='medium', color=theme['top'])
-            t_side_thin = Side(style='thin', color='CBD5E1')
             for col_i in (c_col, c_col + 1):
-                target_ws.cell(row=c_row, column=col_i).border = Border(top=t_side_top, left=t_side_thin, right=t_side_thin)
+                target_ws.cell(row=c_row, column=col_i).border = Border(top=t_side_thin, left=t_side_thin, right=t_side_thin)
             target_ws.row_dimensions[c_row].height = 22
 
             # 卡片数值行 (c_row + 1)
