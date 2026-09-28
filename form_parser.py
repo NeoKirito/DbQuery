@@ -265,9 +265,6 @@ class FormParser:
 
     @staticmethod
     def parse_file(file_path, forms_root=None):
-        form = QueryForm()
-        form.file_path = file_path
-
         content = None
         for enc in ('utf-8-sig', 'gb18030', 'utf-8', 'latin1'):
             try:
@@ -279,6 +276,13 @@ class FormParser:
         if content is None:
             with open(file_path, 'r', encoding='utf-8', errors='replace') as form_file:
                 content = form_file.read()
+
+        return FormParser.parse_content(content, file_path=file_path, forms_root=forms_root)
+
+    @staticmethod
+    def parse_content(content, file_path='', forms_root=None):
+        form = QueryForm()
+        form.file_path = file_path
 
         meta_group = ''
         meta_order = None
@@ -463,6 +467,96 @@ class FormParser:
         elif form.blocks and not form.sql:
             form.sql = form.blocks[0].sql
         return form
+
+    @staticmethod
+    def dump_content(form):
+        """将 QueryForm 对象序列化为结构清晰、易读的标准 .qry 文本内容。"""
+        lines = ["[meta]"]
+        lines.append("title = {}".format(form.title or '新建查询'))
+        if form.group:
+            lines.append("group = {}".format(form.group))
+        if form.description:
+            lines.append("description = {}".format(form.description))
+        if form.order is not None:
+            val = int(form.order) if form.order == int(form.order) else form.order
+            lines.append("order = {}".format(val))
+        if form.datasource and form.datasource.lower() != 'default':
+            lines.append("datasource = {}".format(form.datasource))
+        if form.web_enabled:
+            lines.append("web_enabled = true")
+        if form.query_type and form.query_type.lower() != 'select':
+            lines.append("type = {}".format(form.query_type))
+        if getattr(form, 'layout', None):
+            lines.append("layout = {}".format(', '.join(form.layout)))
+        elif len(getattr(form, 'blocks', [])) > 1:
+            lines.append("layout = {}".format(', '.join(b.id for b in form.blocks)))
+        if getattr(form, 'summary_footer', ''):
+            lines.append("summary_footer = {}".format(form.summary_footer))
+
+        lines.append("")
+        lines.append("[params]")
+        params = getattr(form, 'params', []) or []
+        if params:
+            for p in params:
+                t_str = p.ptype or 'text'
+                if p.ptype in ('select', 'radio') and getattr(p, 'options', None):
+                    t_str = "{}:{}".format(p.ptype, ','.join(p.options))
+
+                parts = [p.name, p.label or p.name, t_str]
+                has_subsequent = any([
+                    p.placeholder, p.required, p.width,
+                    getattr(p, 'options_sql', None),
+                    getattr(p, 'searchable', False),
+                    getattr(p, 'allow_custom', False)
+                ])
+                if p.default or has_subsequent:
+                    parts.append(str(p.default or ''))
+
+                if p.placeholder:
+                    parts.append("placeholder={}".format(p.placeholder))
+                if p.required:
+                    parts.append("required")
+                if p.width:
+                    parts.append("width={}".format(p.width))
+                if getattr(p, 'searchable', False) and p.ptype == 'select':
+                    parts.append("searchable")
+                if getattr(p, 'allow_custom', False):
+                    parts.append("allow_custom=true")
+                if getattr(p, 'options_sql', None):
+                    parts.append("options_sql={}".format(p.options_sql))
+
+                p_line = "{} = {}".format(parts[0], ' | '.join(parts[1:]))
+                lines.append(p_line)
+        else:
+            lines.append("# 无查询参数")
+
+        blocks = getattr(form, 'blocks', []) or []
+        if len(blocks) == 1 and blocks[0].id == 'main' and blocks[0].btype == 'table' and not blocks[0].summary_footer:
+            lines.append("")
+            lines.append("[sql]")
+            lines.append(blocks[0].sql or form.sql or '')
+        elif blocks:
+            for b in blocks:
+                lines.append("")
+                lines.append("[block.{}]".format(b.id))
+                if b.title and b.title != b.id:
+                    lines.append("title = {}".format(b.title))
+                if b.btype and b.btype != 'table':
+                    lines.append("type = {}".format(b.btype))
+                if b.datasource and b.datasource.lower() != 'default':
+                    lines.append("datasource = {}".format(b.datasource))
+                if b.summary_footer:
+                    lines.append("summary_footer = {}".format(b.summary_footer))
+                if b.width and b.width != '100%':
+                    lines.append("width = {}".format(b.width))
+                lines.append("sql = {}".format(b.sql or ''))
+        else:
+            lines.append("")
+            lines.append("[sql]")
+            lines.append(form.sql or '')
+
+        lines.append("")
+        return '\n'.join(lines)
 
     @staticmethod
     def is_safe_sql(sql, query_type='select'):
