@@ -103,6 +103,221 @@ class ComboLineEditClickFilter(QObject):
         return False
 
 
+def extract_sql_columns_helper(sql_text):
+    """从 SQL 文本中尽可能提取可能的列别名或字段名，供向导使用"""
+    cols = []
+    if not sql_text:
+        return cols
+    for m in re.finditer(r'(?:AS\s+)(?:N?[\'\"\[]?([a-zA-Z0-9_\u4e00-\u9fa5]+)[\'\"\]]?)', sql_text, re.IGNORECASE):
+        c = m.group(1).strip()
+        if c and c.upper() not in ('TOP', 'DISTINCT', 'ALL'):
+            cols.append(c)
+    if not cols:
+        m_sel = re.search(r'SELECT\s+(.*?)\s+FROM', sql_text, re.IGNORECASE | re.DOTALL)
+        if m_sel:
+            part = re.sub(r'^(?:DISTINCT|TOP\s+\d+)\s+', '', m_sel.group(1).strip(), flags=re.IGNORECASE)
+            for item in re.split(r',\s*(?![^()]*\))', part):
+                item = item.strip()
+                m_item = re.search(r'(?:[\.\s]|^)(?:N?[\'\"\[]?([a-zA-Z0-9_\u4e00-\u9fa5]+)[\'\"\]]?)$', item)
+                if m_item:
+                    c = m_item.group(1).strip()
+                    if c and c.upper() not in ('COUNT', 'SUM', 'AVG', 'MIN', 'MAX', '1'):
+                        cols.append(c)
+    return list(dict.fromkeys(cols))
+
+
+class SummaryRuleWizardDialog(QDialog):
+    """表格置底合计规则 (summary_footer) 可视化点选配置向导"""
+
+    def __init__(self, parent=None, current_rule="", candidate_columns=None):
+        super(SummaryRuleWizardDialog, self).__init__(parent)
+        self.setWindowTitle("🛠️ 表格合计规则可视化配置向导")
+        self.resize(540, 480)
+        self.result_rule = current_rule or ""
+        self.candidate_columns = candidate_columns or []
+
+        self._rules = []
+        self._is_auto = (self.result_rule.strip().lower() == 'auto')
+        self._parse_existing_rule(self.result_rule)
+
+        self._init_ui()
+
+    def _parse_existing_rule(self, rule_str):
+        rule_str = (rule_str or "").strip()
+        if not rule_str or rule_str.lower() == 'auto':
+            return
+        segments = [s.strip() for s in rule_str.split(';') if s.strip()]
+        for seg in segments:
+            if ':' in seg:
+                func, cols_str = seg.split(':', 1)
+                func = func.strip().lower()
+                for c in cols_str.split(','):
+                    c = c.strip()
+                    if c:
+                        self._rules.append({'func': func, 'col': c})
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        # 顶部提示条
+        banner = QFrame()
+        banner.setStyleSheet("background: #F0F7FF; border: 1px solid #BAE0FF; border-radius: 6px; padding: 6px;")
+        b_lay = QVBoxLayout(banner)
+        b_lay.setContentsMargins(8, 6, 8, 6)
+        b_lay.setSpacing(3)
+        t1 = QLabel("<b>📊 合计规则向导</b>：点选聚合函数与列名，无需记忆手写语法")
+        t1.setStyleSheet("color: #0050B3; font-size: 12px;")
+        t2 = QLabel("支持自动累加所有数值列 (auto)，或为指定列单独设定求和(sum)、计数(count)、平均值(avg)等。")
+        t2.setStyleSheet("color: #505F79; font-size: 11px;")
+        b_lay.addWidget(t1)
+        b_lay.addWidget(t2)
+        layout.addWidget(banner)
+
+        # 模式切换
+        mode_grp = QGroupBox("合计行生成模式")
+        m_lay = QVBoxLayout(mode_grp)
+        self.rb_auto = QRadioButton("自动汇总求和 (auto) - 自动累加全部数值列（最常用，推荐）")
+        self.rb_custom = QRadioButton("自定义聚合规则 - 指定列求和/计数/平均值")
+        if self._is_auto:
+            self.rb_auto.setChecked(True)
+        else:
+            self.rb_custom.setChecked(True)
+        self.rb_auto.toggled.connect(self._on_mode_toggled)
+        m_lay.addWidget(self.rb_auto)
+        m_lay.addWidget(self.rb_custom)
+        layout.addWidget(mode_grp)
+
+        # 自定义规则容器
+        self.custom_container = QWidget()
+        c_lay = QVBoxLayout(self.custom_container)
+        c_lay.setContentsMargins(0, 0, 0, 0)
+        c_lay.setSpacing(8)
+
+        # 添加新规则工具栏
+        add_bar = QHBoxLayout()
+        add_bar.addWidget(QLabel("聚合函数:"))
+        self.func_combo = QComboBox()
+        self.func_combo.addItem("求和 (sum) - 累加列总和", "sum")
+        self.func_combo.addItem("计数 (count) - 统计记录数", "count")
+        self.func_combo.addItem("平均值 (avg) - 计算算术平均", "avg")
+        self.func_combo.addItem("最小值 (min) - 取列最小值", "min")
+        self.func_combo.addItem("最大值 (max) - 取列最大值", "max")
+        add_bar.addWidget(self.func_combo, stretch=2)
+
+        add_bar.addWidget(QLabel("目标列名:"))
+        self.col_combo = QComboBox()
+        self.col_combo.setEditable(True)
+        if self.candidate_columns:
+            for c in self.candidate_columns:
+                self.col_combo.addItem(c)
+        else:
+            self.col_combo.addItem("实收金额")
+            self.col_combo.addItem("体检人次")
+        self.col_combo.setToolTip("选择或手动输入需要聚合统计的列名")
+        add_bar.addWidget(self.col_combo, stretch=2)
+
+        self.btn_add_rule = QPushButton("➕ 添加此列规则")
+        self.btn_add_rule.setStyleSheet("background: #0052CC; color: white; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+        self.btn_add_rule.clicked.connect(self._add_rule)
+        add_bar.addWidget(self.btn_add_rule)
+        c_lay.addLayout(add_bar)
+
+        # 规则表格
+        self.rule_table = QTableWidget()
+        self.rule_table.setColumnCount(3)
+        self.rule_table.setHorizontalHeaderLabels(["目标列名", "聚合函数", "操作"])
+        self.rule_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.rule_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
+        self.rule_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        self.rule_table.setColumnWidth(1, 140)
+        self.rule_table.setColumnWidth(2, 70)
+        self.rule_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.rule_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        c_lay.addWidget(self.rule_table, stretch=1)
+
+        layout.addWidget(self.custom_container, stretch=1)
+
+        # 实时生成规则预览
+        prev_box = QHBoxLayout()
+        prev_box.addWidget(QLabel("规则字符串预览:"))
+        self.prev_lbl = QLabel("")
+        self.prev_lbl.setStyleSheet("font-family: monospace; font-weight: bold; color: #0052CC; background: #FAFAFA; border: 1px solid #D9D9D9; border-radius: 4px; padding: 4px 8px;")
+        prev_box.addWidget(self.prev_lbl, stretch=1)
+        layout.addLayout(prev_box)
+
+        # 底部确定/取消按钮
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok = QPushButton("确认应用")
+        btn_ok.setStyleSheet("background: #00875A; color: white; font-weight: bold; padding: 6px 18px; border-radius: 4px;")
+        btn_ok.clicked.connect(self._on_confirm)
+        btn_row.addWidget(btn_cancel)
+        btn_row.addWidget(btn_ok)
+        layout.addLayout(btn_row)
+
+        self._refresh_rule_table()
+        self._on_mode_toggled()
+
+    def _on_mode_toggled(self):
+        is_auto = self.rb_auto.isChecked()
+        self.custom_container.setEnabled(not is_auto)
+        self._update_preview()
+
+    def _add_rule(self):
+        col = self.col_combo.currentText().strip()
+        if not col:
+            QMessageBox.warning(self, "提示", "请选择或输入目标列名")
+            return
+        func = self.func_combo.currentData() or "sum"
+        self._rules = [r for r in self._rules if r['col'] != col]
+        self._rules.append({'func': func, 'col': col})
+        self._refresh_rule_table()
+
+    def _delete_rule(self, idx):
+        if 0 <= idx < len(self._rules):
+            del self._rules[idx]
+            self._refresh_rule_table()
+
+    def _refresh_rule_table(self):
+        self.rule_table.setRowCount(len(self._rules))
+        func_names = {'sum': '求和 (sum)', 'count': '计数 (count)', 'avg': '平均 (avg)', 'min': '最小 (min)', 'max': '最大 (max)'}
+        for r, item in enumerate(self._rules):
+            self.rule_table.setItem(r, 0, QTableWidgetItem(item['col']))
+            self.rule_table.setItem(r, 1, QTableWidgetItem(func_names.get(item['func'], item['func'])))
+            btn_del = QPushButton("删除")
+            btn_del.setStyleSheet("color: #DE350B; font-size: 11px;")
+            btn_del.clicked.connect(lambda ch=False, i=r: self._delete_rule(i))
+            self.rule_table.setCellWidget(r, 2, btn_del)
+        self._update_preview()
+
+    def _build_rule_string(self):
+        if self.rb_auto.isChecked():
+            return "auto"
+        if not self._rules:
+            return ""
+        from collections import OrderedDict
+        f_map = OrderedDict()
+        for r in self._rules:
+            f = r['func']
+            f_map.setdefault(f, []).append(r['col'])
+        parts = []
+        for f, cols in f_map.items():
+            parts.append(f"{f}:{','.join(cols)}")
+        return '; '.join(parts)
+
+    def _update_preview(self):
+        s = self._build_rule_string()
+        self.prev_lbl.setText(s or "(无合计规则)")
+
+    def _on_confirm(self):
+        self.result_rule = self._build_rule_string()
+        self.accept()
+
+
 # ──────────────────────────────────────────────
 #  对话框主体：双模式可视化表单设计器
 # ──────────────────────────────────────────────
@@ -379,18 +594,70 @@ class FormEditorDialog(QDialog):
         adv_form.addRow("Web 权限:", access_row)
 
         # 默认合计规则
+        sum_box = QVBoxLayout()
+        sum_box.setSpacing(4)
+
+        sum_top = QHBoxLayout()
+        self.meta_summary_combo = QComboBox()
+        self.meta_summary_combo.addItem("无合计行（不启用合计）", "")
+        self.meta_summary_combo.addItem("自动识别数值列累加 (auto) - 推荐", "auto")
+        self.meta_summary_combo.addItem("自定义聚合规则 (指定列求和/计数/均值...)", "custom")
+        self.meta_summary_combo.currentIndexChanged.connect(self._on_meta_summary_combo_changed)
+        sum_top.addWidget(self.meta_summary_combo, stretch=1)
+
+        self.btn_meta_wizard = QPushButton("🛠️ 规则向导...")
+        self.btn_meta_wizard.setStyleSheet("padding: 2px 8px; background: #EBF3FC; color: #1A6EB5; border: 1px solid #BEE3F8; border-radius: 3px;")
+        self.btn_meta_wizard.setToolTip("打开可视化向导，点选字段与函数生成合计规则")
+        self.btn_meta_wizard.clicked.connect(lambda: self._open_summary_wizard(self.meta_summary_edit, None))
+        sum_top.addWidget(self.btn_meta_wizard)
+        sum_box.addLayout(sum_top)
+
         self.meta_summary_edit = QLineEdit()
-        self.meta_summary_edit.setPlaceholderText("留空按常规，或填写 auto（自动对数值列求和），或指定 sum:实收金额; count:体检号")
-        self.meta_summary_edit.setToolTip("【合计规则】\n• 留空：不显示合计行；\n• auto：自动识别数值列并累加求和，首列显示「合计 (N条)」；\n• 指定聚合：如 sum:金额,实收; count:单号; avg:单价。")
-        self.meta_summary_edit.textChanged.connect(self._on_meta_field_changed)
-        adv_form.addRow("默认合计规则:", self.meta_summary_edit)
+        self.meta_summary_edit.setPlaceholderText("选择「自定义」时可在此编辑，或点击上方「规则向导」可视化生成")
+        self.meta_summary_edit.setToolTip("【合计规则】留空无合计；auto 自动对数值求和；或指定 sum:实收金额; count:体检号")
+        self.meta_summary_edit.textChanged.connect(self._on_meta_summary_text_changed)
+        sum_box.addWidget(self.meta_summary_edit)
+
+        meta_sum_quick = QHBoxLayout()
+        meta_sum_quick.setSpacing(4)
+        for label, val in [("设为 auto", "auto"), ("+ sum:求和", "sum:"), ("+ count:计数", "count:"), ("+ avg:均值", "avg:"), ("清空", "")]:
+            btn = QPushButton(label)
+            btn.setStyleSheet("padding: 1px 6px; font-size: 11px; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 3px;")
+            btn.clicked.connect(lambda checked=False, v=val: self._apply_summary_quick(self.meta_summary_edit, self.meta_summary_combo, v))
+            meta_sum_quick.addWidget(btn)
+        meta_sum_quick.addStretch()
+        sum_box.addLayout(meta_sum_quick)
+        adv_form.addRow("默认合计规则:", sum_box)
 
         # 区块排版自定义
+        layout_box = QVBoxLayout()
+        layout_box.setSpacing(4)
+
+        layout_top = QHBoxLayout()
+        self.btn_sync_layout = QPushButton("🔄 一键按区块列表顺序同步")
+        self.btn_sync_layout.setStyleSheet("padding: 2px 10px; background: #EBF3FC; color: #1A6EB5; border: 1px solid #BEE3F8; border-radius: 4px; font-weight: bold;")
+        self.btn_sync_layout.setToolTip("一键将当前区块清单从上到下的顺序同步为此处的排版顺序")
+        self.btn_sync_layout.clicked.connect(self._sync_layout_from_blocks)
+        layout_top.addWidget(self.btn_sync_layout)
+
+        layout_hint = QLabel("（系统默认按区块列表从上到下顺序排版，点击右侧按钮可一键同步）")
+        layout_hint.setStyleSheet("color: #7A869A; font-size: 11px;")
+        layout_top.addWidget(layout_hint)
+        layout_top.addStretch()
+        layout_box.addLayout(layout_top)
+
+        self.layout_chips_label = QLabel("排版渲染流程: (未设置)")
+        self.layout_chips_label.setStyleSheet("color: #1E40AF; background: #EFF6FF; border: 1px dashed #BFDBFE; border-radius: 4px; padding: 4px 8px; font-size: 11px;")
+        layout_box.addWidget(self.layout_chips_label)
+
         self.layout_edit = QLineEdit()
-        self.layout_edit.setPlaceholderText("多区块排版顺序（逗号分隔区块ID，留空默认按区块列表顺序）")
-        self.layout_edit.setToolTip("【排版顺序】当配置了多个表格或指标卡区块时，可在此以逗号指定显示先后顺序（如：kpi, main, sub）")
+        self.layout_edit.setPlaceholderText("多区块排版顺序（逗号分隔区块ID，默认自动跟随区块列表顺序）")
+        self.layout_edit.setToolTip("【排版顺序】当配置了多个表格或指标卡区块时，系统将严格按照此顺序渲染展示")
         self.layout_edit.textChanged.connect(self._on_meta_field_changed)
-        adv_form.addRow("排版顺序(layout):", self.layout_edit)
+        self.layout_edit.textChanged.connect(self._update_layout_chips)
+        layout_box.addWidget(self.layout_edit)
+
+        adv_form.addRow("排版顺序(layout):", layout_box)
 
         layout.addWidget(adv_grp)
 
@@ -518,21 +785,35 @@ class FormEditorDialog(QDialog):
         self.p_width_edit.setToolTip("【控件宽度】支持像素（如 160px）或百分比（如 30%），留空为自适应")
         self.p_width_edit.textChanged.connect(self._save_current_param_details)
         type_row.addWidget(self.p_width_edit, stretch=1)
+
+        self.p_width_combo = QComboBox()
+        self.p_width_combo.addItem("宽度预设...", "")
+        self.p_width_combo.addItem("自适应 (留空)", "")
+        self.p_width_combo.addItem("100% (整行全宽)", "100%")
+        self.p_width_combo.addItem("50% (半宽并排)", "50%")
+        self.p_width_combo.addItem("33.3% (三列并排)", "33.3%")
+        self.p_width_combo.addItem("25% (四列并排)", "25%")
+        self.p_width_combo.addItem("200px", "200px")
+        self.p_width_combo.addItem("160px (标准宽)", "160px")
+        self.p_width_combo.addItem("120px (短输入框)", "120px")
+        self.p_width_combo.currentIndexChanged.connect(lambda: self._on_preset_combo_applied(self.p_width_combo, self.p_width_edit))
+        type_row.addWidget(self.p_width_combo)
         p_form.addRow("控件类型/特性:", type_row)
 
         # 默认值（带快捷填入按键）
         def_row = QHBoxLayout()
+        def_row.setSpacing(4)
         self.p_default_edit = QLineEdit()
         self.p_default_edit.setPlaceholderText("默认填充值，日期可使用 {today}")
         self.p_default_edit.setToolTip("【默认值】打开表单时的初始值。日期参数可直接输入 {today} 宏自动取当天日期")
         self.p_default_edit.textChanged.connect(self._save_current_param_details)
-        def_row.addWidget(self.p_default_edit, stretch=1)
+        def_row.addWidget(self.p_default_edit, stretch=2)
 
-        btn_today = QPushButton("+ {today}")
-        btn_today.setStyleSheet("padding: 2px 8px; background: #E6F7FF; color: #0050B3; border: 1px solid #91D5FF; border-radius: 3px;")
-        btn_today.setToolTip("快捷填入 {today} 动态当天宏")
-        btn_today.clicked.connect(lambda: self.p_default_edit.setText("{today}"))
-        def_row.addWidget(btn_today)
+        for l, v in [("+ {today}", "{today}"), ("+ 1", "1"), ("+ 0", "0"), ("+ 全部", "全部")]:
+            btn = QPushButton(l)
+            btn.setStyleSheet("padding: 2px 6px; font-size: 11px; background: #E6F7FF; color: #0050B3; border: 1px solid #91D5FF; border-radius: 3px;")
+            btn.clicked.connect(lambda ch=False, val=v: self.p_default_edit.setText(val))
+            def_row.addWidget(btn)
 
         self.p_placeholder_edit = QLineEdit()
         self.p_placeholder_edit.setPlaceholderText("输入框内浅灰提示文字 (placeholder)")
@@ -542,6 +823,9 @@ class FormEditorDialog(QDialog):
         p_form.addRow("默认值/提示:", def_row)
 
         # 候选项设置（针对 select / radio）
+        opt_box = QVBoxLayout()
+        opt_box.setSpacing(4)
+
         opt_row = QHBoxLayout()
         self.p_options_edit = QLineEdit()
         self.p_options_edit.setPlaceholderText("静态候选项（逗号分隔，如：全部,启用,禁用）")
@@ -559,7 +843,19 @@ class FormEditorDialog(QDialog):
         self.p_allow_custom_check.setToolTip("是否允许操作员输入下拉候选列表中不存在的自由文本")
         self.p_allow_custom_check.toggled.connect(self._save_current_param_details)
         opt_row.addWidget(self.p_allow_custom_check)
-        p_form.addRow("候选项配置:", opt_row)
+        opt_box.addLayout(opt_row)
+
+        opt_presets = QHBoxLayout()
+        opt_presets.setSpacing(4)
+        opt_presets.addWidget(QLabel("候选项常用预设:"))
+        for p_title, p_val in [("是/否", "是,否"), ("男/女", "男,女"), ("全部/有效/停用", "全部,有效,停用"), ("已完成/进行中/未开始", "已完成,进行中,未开始")]:
+            btn_p = QPushButton(p_title)
+            btn_p.setStyleSheet("padding: 1px 6px; font-size: 11px; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 3px;")
+            btn_p.clicked.connect(lambda ch=False, v=p_val: self.p_options_edit.setText(v))
+            opt_presets.addWidget(btn_p)
+        opt_presets.addStretch()
+        opt_box.addLayout(opt_presets)
+        p_form.addRow("候选项配置:", opt_box)
 
         # 动态 SQL 候选项
         self.p_options_sql_edit = QLineEdit()
@@ -652,6 +948,9 @@ class FormEditorDialog(QDialog):
         self.block_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.block_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.block_table.itemSelectionChanged.connect(self._on_block_table_selection_changed)
+        b_order_tip = QLabel("💡 <b>排版顺序提示</b>：区块在此列表中的从上到下顺序即为界面渲染顺序。选中区块后点击 [⬆️上移] / [⬇️下移] 即可直观排版，无需手写输入。")
+        b_order_tip.setStyleSheet("color: #0747A6; background: #EBF3FC; border: 1px dashed #BEE3F8; border-radius: 4px; padding: 4px 8px; font-size: 11px;")
+        b_layout.addWidget(b_order_tip)
         b_layout.addWidget(self.block_table)
 
         splitter.addWidget(block_list_grp)
@@ -697,11 +996,41 @@ class FormEditorDialog(QDialog):
 
         b_meta_row2 = QHBoxLayout()
         b_meta_row2.addWidget(QLabel("合计规则:"))
+
+        b_sum_box = QVBoxLayout()
+        b_sum_box.setSpacing(4)
+
+        b_sum_top = QHBoxLayout()
+        self.b_summary_combo = QComboBox()
+        self.b_summary_combo.addItem("跟随默认（沿用基本信息规则）", "")
+        self.b_summary_combo.addItem("自动识别数值列累加 (auto) - 推荐", "auto")
+        self.b_summary_combo.addItem("自定义聚合规则 (指定列求和/计数/均值...)", "custom")
+        self.b_summary_combo.currentIndexChanged.connect(self._on_b_summary_combo_changed)
+        b_sum_top.addWidget(self.b_summary_combo, stretch=1)
+
+        self.btn_b_wizard = QPushButton("🛠️ 规则向导...")
+        self.btn_b_wizard.setStyleSheet("padding: 2px 8px; background: #EBF3FC; color: #1A6EB5; border: 1px solid #BEE3F8; border-radius: 3px;")
+        self.btn_b_wizard.setToolTip("根据当前区块的 SQL 字段，可视化点选生成合计规则")
+        self.btn_b_wizard.clicked.connect(lambda: self._open_summary_wizard(self.b_summary_edit, self.b_sql_edit.toPlainText()))
+        b_sum_top.addWidget(self.btn_b_wizard)
+        b_sum_box.addLayout(b_sum_top)
+
         self.b_summary_edit = QLineEdit()
         self.b_summary_edit.setPlaceholderText("auto 或 sum:实收金额,人次; count:体检号; avg:均价")
-        self.b_summary_edit.setToolTip("【合计规则】\n• auto：自动识别数值列并累加求和，首列显示「合计 (N条)」；\n• 聚合格式：sum:金额,人次; count:单号; avg:客单价；\n• 留空：跟随表单基本信息中的默认合计规则。")
-        self.b_summary_edit.textChanged.connect(self._save_current_block_details)
-        b_meta_row2.addWidget(self.b_summary_edit, stretch=2)
+        self.b_summary_edit.setToolTip("【合计规则】\n• 留空：跟随表单基本信息中的默认合计规则；\n• auto：自动识别数值列并累加求和；\n• 自定义：点击「规则向导」可视化点选生成。")
+        self.b_summary_edit.textChanged.connect(self._on_b_summary_text_changed)
+        b_sum_box.addWidget(self.b_summary_edit)
+
+        b_sum_quick = QHBoxLayout()
+        b_sum_quick.setSpacing(4)
+        for label, val in [("设为 auto", "auto"), ("+ sum:求和", "sum:"), ("+ count:计数", "count:"), ("+ avg:均值", "avg:"), ("清空", "")]:
+            btn = QPushButton(label)
+            btn.setStyleSheet("padding: 1px 6px; font-size: 11px; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 3px;")
+            btn.clicked.connect(lambda checked=False, v=val: self._apply_summary_quick(self.b_summary_edit, self.b_summary_combo, v))
+            b_sum_quick.addWidget(btn)
+        b_sum_quick.addStretch()
+        b_sum_box.addLayout(b_sum_quick)
+        b_meta_row2.addLayout(b_sum_box, stretch=2)
 
         b_meta_row2.addWidget(QLabel("显示宽度:"))
         self.b_width_edit = QLineEdit()
@@ -709,6 +1038,16 @@ class FormEditorDialog(QDialog):
         self.b_width_edit.setToolTip("【显示宽度】在网页端或并排布局时的宽度占比，桌面端默认占满 100%")
         self.b_width_edit.textChanged.connect(self._save_current_block_details)
         b_meta_row2.addWidget(self.b_width_edit, stretch=1)
+
+        self.b_width_combo = QComboBox()
+        self.b_width_combo.addItem("宽度预设...", "")
+        self.b_width_combo.addItem("100% (整行全宽/默认)", "100%")
+        self.b_width_combo.addItem("50% (半宽并排)", "50%")
+        self.b_width_combo.addItem("33.3% (三列并排)", "33.3%")
+        self.b_width_combo.addItem("25% (四列并排)", "25%")
+        self.b_width_combo.currentIndexChanged.connect(lambda: self._on_preset_combo_applied(self.b_width_combo, self.b_width_edit))
+        b_meta_row2.addWidget(self.b_width_combo)
+
         bd_layout.addLayout(b_meta_row2)
 
         # ★ 参数快捷插入工具条
@@ -1782,6 +2121,7 @@ ORDER BY SUM(PaidFee) DESC
             self.block_table.item(row, 3).setText(b.datasource)
             self.block_table.item(row, 4).setText(b.summary_footer)
             self.block_table.blockSignals(False)
+            self._update_layout_chips()
 
     def _on_b_sql_changed(self):
         if not self._loading_block and 0 <= self._selected_block_index < len(self._blocks_data):
@@ -1798,6 +2138,7 @@ ORDER BY SUM(PaidFee) DESC
         )
         self._blocks_data.append(new_b)
         self._reload_block_table(select_row=len(self._blocks_data) - 1)
+        self._sync_layout_from_blocks()
 
     def _on_block_add_cards(self):
         cnt = len(self._blocks_data) + 1
@@ -1810,6 +2151,7 @@ ORDER BY SUM(PaidFee) DESC
         )
         self._blocks_data.append(new_b)
         self._reload_block_table(select_row=len(self._blocks_data) - 1)
+        self._sync_layout_from_blocks()
 
     def _on_block_delete(self):
         if len(self._blocks_data) <= 1:
@@ -1819,18 +2161,21 @@ ORDER BY SUM(PaidFee) DESC
         if 0 <= row < len(self._blocks_data):
             del self._blocks_data[row]
             self._reload_block_table(select_row=max(0, row - 1))
+            self._sync_layout_from_blocks()
 
     def _on_block_move_up(self):
         row = self.block_table.currentRow()
         if row > 0:
             self._blocks_data[row - 1], self._blocks_data[row] = self._blocks_data[row], self._blocks_data[row - 1]
             self._reload_block_table(select_row=row - 1)
+            self._sync_layout_from_blocks()
 
     def _on_block_move_down(self):
         row = self.block_table.currentRow()
         if 0 <= row < len(self._blocks_data) - 1:
             self._blocks_data[row], self._blocks_data[row + 1] = self._blocks_data[row + 1], self._blocks_data[row]
             self._reload_block_table(select_row=row + 1)
+            self._sync_layout_from_blocks()
 
     def _refresh_quick_param_buttons(self):
         """刷新区块 SQL 框上方的快捷插入参数按钮"""
@@ -1900,6 +2245,139 @@ ORDER BY SUM(PaidFee) DESC
     def _on_meta_field_changed(self):
         """基本信息改变时的非阻塞反馈"""
         pass
+
+    def _apply_summary_quick(self, target_line_edit, combo_widget, val):
+        """快捷按钮设置合计规则"""
+        if val == 'auto':
+            target_line_edit.setText('auto')
+            if combo_widget:
+                idx = combo_widget.findData('auto')
+                if idx >= 0:
+                    combo_widget.setCurrentIndex(idx)
+        elif val == '':
+            target_line_edit.setText('')
+            if combo_widget:
+                combo_widget.setCurrentIndex(0)
+        elif val.endswith(':'):
+            cur = target_line_edit.text().strip()
+            if cur.lower() == 'auto':
+                cur = ''
+            if not cur:
+                new_text = val
+            elif cur.endswith(';') or cur.endswith('; '):
+                new_text = cur.rstrip() + ' ' + val
+            else:
+                new_text = cur + '; ' + val
+            target_line_edit.setText(new_text)
+            if combo_widget:
+                idx = combo_widget.findData('custom')
+                if idx >= 0:
+                    combo_widget.setCurrentIndex(idx)
+        else:
+            target_line_edit.setText(val)
+
+    def _open_summary_wizard(self, target_line_edit, sql_text=None):
+        """打开合计规则可视化点选向导"""
+        if not sql_text:
+            if 0 <= self._selected_block_index < len(self._blocks_data):
+                sql_text = self._blocks_data[self._selected_block_index].sql
+            elif self._blocks_data:
+                sql_text = self._blocks_data[0].sql
+            else:
+                sql_text = ""
+        cols = extract_sql_columns_helper(sql_text)
+        dlg = SummaryRuleWizardDialog(self, current_rule=target_line_edit.text().strip(), candidate_columns=cols)
+        if dlg.exec_() == QDialog.Accepted:
+            target_line_edit.setText(dlg.result_rule)
+
+    def _on_preset_combo_applied(self, combo, target_line_edit):
+        """当用户在宽度预设下拉框中选择时，填入对应文本输入框"""
+        idx = combo.currentIndex()
+        if idx <= 0:
+            return
+        val = combo.currentData()
+        if val is not None:
+            target_line_edit.setText(val)
+        combo.blockSignals(True)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+
+    def _sync_layout_from_blocks(self):
+        """一键将区块列表顺序同步到基本信息的排版顺序 layout 中"""
+        ids = [b.id for b in self._blocks_data if b.id]
+        self.layout_edit.setText(', '.join(ids))
+        self._update_layout_chips()
+
+    def _update_layout_chips(self):
+        """更新排版顺序流程可视化标签"""
+        if not hasattr(self, 'layout_chips_label'):
+            return
+        text = self.layout_edit.text().strip()
+        if not text:
+            ids = [b.id for b in self._blocks_data if b.id]
+        else:
+            ids = [x.strip() for x in text.split(',') if x.strip()]
+
+        if not ids:
+            self.layout_chips_label.setText("排版渲染流程: (未设置区块)")
+            return
+
+        chips = []
+        for idx, bid in enumerate(ids, 1):
+            btitle = ""
+            for b in self._blocks_data:
+                if b.id == bid:
+                    if b.title and b.title != b.id:
+                        btitle = f" ({b.title})"
+                    break
+            chips.append(f"<span style='background:#EBF3FC; color:#0747A6; padding:2px 6px; border-radius:3px; border:1px solid #BEE3F8; font-weight:bold;'>{idx}. {bid}{btitle}</span>")
+        self.layout_chips_label.setText("排版渲染流程: " + " ➔ ".join(chips))
+
+    def _on_meta_summary_combo_changed(self):
+        val = self.meta_summary_combo.currentData()
+        if val == 'auto':
+            self.meta_summary_edit.setText('auto')
+        elif val == '':
+            self.meta_summary_edit.setText('')
+        elif val == 'custom':
+            cur = self.meta_summary_edit.text().strip()
+            if not cur or cur.lower() == 'auto':
+                self.meta_summary_edit.setText('sum:')
+
+    def _on_meta_summary_text_changed(self, text):
+        t = (text or '').strip()
+        self.meta_summary_combo.blockSignals(True)
+        if not t:
+            self.meta_summary_combo.setCurrentIndex(0)
+        elif t.lower() == 'auto':
+            self.meta_summary_combo.setCurrentIndex(1)
+        else:
+            self.meta_summary_combo.setCurrentIndex(2)
+        self.meta_summary_combo.blockSignals(False)
+
+    def _on_b_summary_combo_changed(self):
+        val = self.b_summary_combo.currentData()
+        if val == 'auto':
+            self.b_summary_edit.setText('auto')
+        elif val == '':
+            self.b_summary_edit.setText('')
+        elif val == 'custom':
+            cur = self.b_summary_edit.text().strip()
+            if not cur or cur.lower() == 'auto':
+                self.b_summary_edit.setText('sum:')
+
+    def _on_b_summary_text_changed(self, text):
+        if not self._loading_block:
+            self._save_current_block_details()
+        t = (text or '').strip()
+        self.b_summary_combo.blockSignals(True)
+        if not t:
+            self.b_summary_combo.setCurrentIndex(0)
+        elif t.lower() == 'auto':
+            self.b_summary_combo.setCurrentIndex(1)
+        else:
+            self.b_summary_combo.setCurrentIndex(2)
+        self.b_summary_combo.blockSignals(False)
 
     def _sync_visual_to_raw(self):
         """将 Tab 0, 1, 2 中的可视化控件内容序列化并无损同步到 self.editor"""
@@ -2000,7 +2478,9 @@ ORDER BY SUM(PaidFee) DESC
             self.web_enabled_check.blockSignals(False)
 
             self.meta_summary_edit.setText(parsed.summary_footer or '')
+            self._on_meta_summary_text_changed(parsed.summary_footer or '')
             self.layout_edit.setText(', '.join(parsed.layout) if parsed.layout else '')
+            self._update_layout_chips()
 
             # Tab 1: Params
             self._params_data = list(parsed.params)

@@ -1354,11 +1354,13 @@ function renderResult(data, tab) {
     }
     if (data.cards && data.cards.length > 0) {
         var cardsHtml = '';
+        var kpiPalette = ['#1e40af', '#059669', '#d97706', '#7c3aed', '#0891b2'];
         for (var ci = 0; ci < data.cards.length; ci++) {
             var card = data.cards[ci];
+            var cardColor = kpiPalette[ci % kpiPalette.length];
             cardsHtml += '<div class="kpi-card">';
             cardsHtml += '  <div class="kpi-card-title">' + esc(card.title || '') + '</div>';
-            cardsHtml += '  <div class="kpi-card-value">' + esc(card.formatted || String(card.value != null ? card.value : '')) + '</div>';
+            cardsHtml += '  <div class="kpi-card-value" style="color: ' + cardColor + ';">' + esc(card.formatted || String(card.value != null ? card.value : '')) + '</div>';
             cardsHtml += '</div>';
         }
         $cards.html(cardsHtml).removeClass('d-none').show();
@@ -1384,7 +1386,7 @@ function renderResult(data, tab) {
             var btnTitle = esc(tb.title || tb.id);
             var isAct = (bi === 0);
             switcherHtml += '<button type="button" class="block-tab-btn' + (isAct ? ' active' : '') + '" data-bidx="' + bi + '">';
-            switcherHtml += btnTitle + ' <small>(' + (tb.row_count || 0) + ')</small>';
+            switcherHtml += '📋 ' + btnTitle + ' <span class="tab-badge">(' + (tb.row_count || 0) + ')</span>';
             switcherHtml += '</button>';
         }
         $switcher.html(switcherHtml).removeClass('d-none').show();

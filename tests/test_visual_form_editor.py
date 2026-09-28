@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PyQt5.QtWidgets import QApplication
 from form_parser import FormParser, QueryForm, QueryParam, QueryBlock
-from widgets.form_editor import FormEditorDialog
+from widgets.form_editor import FormEditorDialog, extract_sql_columns_helper, SummaryRuleWizardDialog
 
 
 class TestVisualFormEditor(unittest.TestCase):
@@ -288,6 +288,70 @@ class TestVisualFormEditor(unittest.TestCase):
         self.assertEqual(dlg.title_edit.text(), '测试模版载入')
         self.assertEqual(len(dlg._params_data), 1)
         self.assertEqual(dlg._params_data[0].name, 'k')
+
+        dlg.close()
+
+    def test_summary_wizard_and_extract_columns(self):
+        """测试 SQL 字段别名提取与合计规则可视化向导功能"""
+        sql = "SELECT DeptName AS [科室名称], SUM(TotalFee) AS 实收金额, COUNT(ExamNo) AS '体检人次' FROM RegTable"
+        cols = extract_sql_columns_helper(sql)
+        self.assertIn("科室名称", cols)
+        self.assertIn("实收金额", cols)
+        self.assertIn("体检人次", cols)
+
+        # 测试向导解析已有规则
+        wiz = SummaryRuleWizardDialog(None, current_rule="sum:实收金额,体检人次; count:科室名称", candidate_columns=cols)
+        self.assertFalse(wiz._is_auto)
+        self.assertEqual(len(wiz._rules), 3)
+
+        # 测试切换到 auto 模式
+        wiz.rb_auto.setChecked(True)
+        self.assertEqual(wiz._build_rule_string(), "auto")
+
+        # 测试自定义生成规则
+        wiz.rb_custom.setChecked(True)
+        wiz._rules = [{'func': 'sum', 'col': '实收金额'}, {'func': 'avg', 'col': '客单价'}]
+        rule_str = wiz._build_rule_string()
+        self.assertIn("sum:实收金额", rule_str)
+        self.assertIn("avg:客单价", rule_str)
+        wiz.close()
+
+    def test_layout_auto_sync_and_presets(self):
+        """测试区块上下移动时排版顺序自动同步，以及预设下拉与快捷按钮"""
+        dlg = FormEditorDialog(None, self.forms_dir)
+        # 添加两个区块
+        dlg._on_block_add_table()
+        dlg._on_block_add_cards()
+        self.assertGreaterEqual(len(dlg._blocks_data), 3)
+
+        # 检查排版 layout_edit 自动包含所有区块
+        ids = [b.id for b in dlg._blocks_data]
+        self.assertEqual(dlg.layout_edit.text(), ', '.join(ids))
+
+        # 测试移动区块
+        first_id = dlg._blocks_data[0].id
+        dlg.block_table.selectRow(1)
+        dlg._on_block_move_up()
+        new_ids = [b.id for b in dlg._blocks_data]
+        self.assertEqual(dlg.layout_edit.text(), ', '.join(new_ids))
+        self.assertNotEqual(new_ids[0], first_id)
+
+        # 测试预设下拉应用
+        dlg.p_width_combo.setCurrentIndex(2)  # 100%
+        self.assertEqual(dlg.p_width_edit.text(), '100%')
+
+        # 测试合计规则快捷按钮
+        dlg._apply_summary_quick(dlg.meta_summary_edit, dlg.meta_summary_combo, 'auto')
+        self.assertEqual(dlg.meta_summary_edit.text(), 'auto')
+        self.assertEqual(dlg.meta_summary_combo.currentIndex(), 1)
+
+        dlg._apply_summary_quick(dlg.meta_summary_edit, dlg.meta_summary_combo, '')
+        self.assertEqual(dlg.meta_summary_edit.text(), '')
+        self.assertEqual(dlg.meta_summary_combo.currentIndex(), 0)
+
+        dlg._apply_summary_quick(dlg.meta_summary_edit, dlg.meta_summary_combo, 'sum:')
+        self.assertEqual(dlg.meta_summary_edit.text(), 'sum:')
+        self.assertEqual(dlg.meta_summary_combo.currentIndex(), 2)
 
         dlg.close()
 
