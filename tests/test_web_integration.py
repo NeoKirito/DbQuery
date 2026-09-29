@@ -630,5 +630,31 @@ class ExcelCopyTests(unittest.TestCase):
         )
 
 
+
+
+class HealthCheckRouteTests(unittest.TestCase):
+    def setUp(self):
+        self.client = web_server.app.test_client()
+
+    def test_health_check_returns_200_without_authentication(self):
+        for path in ('/api/health', '/health'):
+            res = self.client.get(path)
+            self.assertEqual(res.status_code, 200)
+            data = res.get_json()
+            self.assertEqual(data.get('status'), 'ok')
+            self.assertEqual(data.get('service'), 'DBQuery Web Server')
+            self.assertIn('uptime_seconds', data)
+            self.assertIn('timestamp', data)
+            self.assertEqual(res.headers.get('Access-Control-Allow-Origin'), '*')
+
+    def test_health_check_supports_head_and_options(self):
+        res_head = self.client.head('/api/health')
+        self.assertEqual(res_head.status_code, 200)
+
+        res_options = self.client.options('/api/health')
+        self.assertEqual(res_options.status_code, 204)
+        self.assertEqual(res_options.headers.get('Access-Control-Allow-Origin'), '*')
+
+
 if __name__ == '__main__':
     unittest.main()

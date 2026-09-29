@@ -45,6 +45,141 @@ if exist "%~dp0dist\\DBQuery.exe" (
 )
 """
 
+ALWAYSUP_SERVICE_BAT = """@echo off
+setlocal EnableExtensions
+title DBQuery Web 守护服务 (AlwaysUp)
+cd /d "%~dp0"
+
+:: ============================================================================
+:: DBQuery Web 服务 - AlwaysUp / Windows 服务专用启动脚本
+:: 1. 进程常驻：前台阻塞运行，严禁 start 异步退出，确保 AlwaysUp 正确跟踪 PID
+:: 2. 健康监听：支持 AlwaysUp Sanity Check 定期 GET http://127.0.0.1:端口/api/health
+:: 3. 退出码透传：DBQuery 异常退出时透传 ExitCode，触发 AlwaysUp 自动重启机制
+:: ============================================================================
+
+set "WEB_PORT=6091"
+if not "%~1"=="" (
+    set "WEB_PORT=%~1"
+) else if exist "%~dp0config.ini" (
+    for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "try { $c=Get-Content '%~dp0config.ini' -Raw; if ($c -match '(?ms)\[web\][^\[]*^\s*port\s*=\s*(\d+)') { $matches[1] } else { '6091' } } catch { '6091' }"`) do set "WEB_PORT=%%p"
+)
+if "%WEB_PORT%"=="" set "WEB_PORT=6091"
+
+if exist "%~dp0dist\DBQuery.exe" (
+    set "EXE_PATH=%~dp0dist\DBQuery.exe"
+) else if exist "%~dp0dist_final\DBQuery.exe" (
+    set "EXE_PATH=%~dp0dist_final\DBQuery.exe"
+) else if exist "%~dp0DBQuery.exe" (
+    set "EXE_PATH=%~dp0DBQuery.exe"
+) else (
+    set "EXE_PATH=%~dp0dist\DBQuery.exe"
+)
+
+if not exist "%EXE_PATH%" (
+    echo [ERROR] %date% %time% 未找到主程序: "%EXE_PATH%"
+    exit /b 1
+)
+
+set "PORT_RULE_NAME=DBQuery_Web_%WEB_PORT%"
+set "DBQUERY_TRUST_PROXY_PREFIX=true"
+
+:: 静默放行防火墙（服务运行身份有权限则生效，无权限不报错阻塞）
+netsh advfirewall firewall add rule name="%PORT_RULE_NAME%" dir=in action=allow protocol=TCP localport=%WEB_PORT% profile=any enable=yes >nul 2>&1
+netsh advfirewall firewall add rule name="DBQuery Program Allow" dir=in action=allow program="%EXE_PATH%" protocol=TCP profile=any enable=yes >nul 2>&1
+
+echo ============================================================================
+echo   DBQuery Web AlwaysUp 守护服务正在运行...
+echo   启动时间: %date% %time%
+echo   监听端口: %WEB_PORT%
+echo   存活监听: http://127.0.0.1:%WEB_PORT%/api/health
+echo   主程序:   %EXE_PATH%
+echo ============================================================================
+
+"%EXE_PATH%" --web --port %WEB_PORT%
+
+set "SVC_EXIT=%ERRORLEVEL%"
+echo [INFO] %date% %time% DBQuery Web 服务退出，退出码: %SVC_EXIT%
+endlocal & exit /b %SVC_EXIT%
+"""
+
+CHECK_HEALTH_BAT = """@echo off
+setlocal EnableExtensions
+title DBQuery Web 健康检查与存活监听
+cd /d "%~dp0"
+
+:: 参数处理：支持任意顺序传参端口号与 --silent
+set "WEB_PORT="
+set "IS_SILENT="
+
+for %%a in (%*) do (
+    if /I "%%~a"=="--silent" (
+        set "IS_SILENT=1"
+    ) else if /I "%%~a"=="/silent" (
+        set "IS_SILENT=1"
+    ) else if /I "%%~a"=="silent" (
+        set "IS_SILENT=1"
+    ) else (
+        set "WEB_PORT=%%~a"
+    )
+)
+
+if "%WEB_PORT%"=="" (
+    if exist "%~dp0..\config.ini" (
+        for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "try { $c=Get-Content '%~dp0..\config.ini' -Raw; if ($c -match '(?ms)\[web\][^\[]*^\s*port\s*=\s*(\d+)') { $matches[1] } else { '6091' } } catch { '6091' }"`) do set "WEB_PORT=%%p"
+    ) else if exist "%~dp0config.ini" (
+        for /f "usebackq tokens=*" %%p in (`powershell -NoProfile -Command "try { $c=Get-Content '%~dp0config.ini' -Raw; if ($c -match '(?ms)\[web\][^\[]*^\s*port\s*=\s*(\d+)') { $matches[1] } else { '6091' } } catch { '6091' }"`) do set "WEB_PORT=%%p"
+    )
+)
+if "%WEB_PORT%"=="" set "WEB_PORT=6091"
+
+set "HEALTH_URL=http://127.0.0.1:%WEB_PORT%/api/health"
+
+echo ============================================================================
+echo   正在探测 DBQuery Web 存活状态与监听响应...
+echo   目标地址: %HEALTH_URL%
+echo ============================================================================
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$url = '%HEALTH_URL%';" ^
+    "try {" ^
+    "    $req = [System.Net.HttpWebRequest]::Create($url);" ^
+    "    $req.Timeout = 5000;" ^
+    "    $req.Method = 'GET';" ^
+    "    $res = $req.GetResponse();" ^
+    "    $code = [int]$res.StatusCode;" ^
+    "    $stream = $res.GetResponseStream();" ^
+    "    $reader = New-Object System.IO.StreamReader($stream);" ^
+    "    $body = $reader.ReadToEnd();" ^
+    "    $reader.Close();" ^
+    "    $res.Close();" ^
+    "    if ($code -eq 200) {" ^
+    "        Write-Host '[OK] DBQuery Web 服务监听正常，HTTP 状态码: 200' -ForegroundColor Green;" ^
+    "        Write-Host ('[INFO] 响应内容: ' + $body);" ^
+    "        exit 0;" ^
+    "    } else {" ^
+    "        Write-Host ('[WARN] 状态码异常: ' + $code) -ForegroundColor Yellow;" ^
+    "        exit 1;" ^
+    "    }" ^
+    "} catch {" ^
+    "    Write-Host ('[FAIL] 无法连接到 Web 服务 (端口: %WEB_PORT%)，错误: ' + $_.Exception.Message) -ForegroundColor Red;" ^
+    "    exit 2;" ^
+    "}"
+
+set "STATUS=%ERRORLEVEL%"
+echo.
+if "%STATUS%"=="0" (
+    echo [结果] 服务正在正常监听，AlwaysUp Sanity Check 可正常使用此 URL！
+) else (
+    echo [结果] 服务未正常运行或监听端口未开放，请检查服务状态与日志！
+)
+echo.
+
+if not defined ALWAYSUP_APPLICATION_NAME (
+    if not "%IS_SILENT%"=="1" pause
+)
+endlocal & exit /b %STATUS%
+"""
+
 START_WEB_CN = """@echo off
 setlocal EnableExtensions
 title DBQuery Web 服务
@@ -70,6 +205,13 @@ if exist "%~dp0dist\\DBQuery.exe" (
 )
 set "PORT_RULE_NAME=DBQuery_Web_%WEB_PORT%"
 set "DBQUERY_TRUST_PROXY_PREFIX=true"
+
+:: ── 检测是否在 AlwaysUp 服务环境运行或指定了服务常驻模式 ──
+if /I "%~1"=="--service" goto :RUN_SERVICE
+if /I "%~1"=="service" goto :RUN_SERVICE
+if /I "%~1"=="/service" goto :RUN_SERVICE
+if defined ALWAYSUP_APPLICATION_NAME goto :RUN_SERVICE
+if defined ALWAYSUP goto :RUN_SERVICE
 
 :: 检查管理员权限以自动配置 Windows 防火墙
 net session >nul 2>&1
@@ -127,6 +269,20 @@ echo DBQuery Web 服务已在后台启动成功！
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
 endlocal & exit /b 0
+
+:RUN_SERVICE
+:: ── AlwaysUp / Windows 服务常驻模式（前台阻塞运行，严禁 start 异步退出）──
+if not exist "%EXE_PATH%" (
+    echo [ERROR] DBQuery.exe not found at "%EXE_PATH%"
+    exit /b 1
+)
+netsh advfirewall firewall add rule name="%PORT_RULE_NAME%" dir=in action=allow protocol=TCP localport=%WEB_PORT% profile=any enable=yes >nul 2>&1
+netsh advfirewall firewall add rule name="DBQuery Program Allow" dir=in action=allow program="%EXE_PATH%" protocol=TCP profile=any enable=yes >nul 2>&1
+echo [INFO] DBQuery Web Server starting in AlwaysUp service mode on port %WEB_PORT%...
+"%EXE_PATH%" --web --port %WEB_PORT%
+set "SVC_EXIT=%ERRORLEVEL%"
+echo [INFO] DBQuery Web Server exited with code %SVC_EXIT%
+endlocal & exit /b %SVC_EXIT%
 """
 
 START_WEB_EN = """@echo off
@@ -376,11 +532,20 @@ README_TXT = """================================================================
 ======================================================================
 
 【核心入口】（日常使用直接双击根目录下脚本即可）
-  1. 启动Web服务.bat    - 启动后台 Web 服务（自动放行防火墙并静默运行）
-  2. 停止Web服务.bat    - 一键停止后台运行的 Web 服务
-  3. 重启Web服务.bat    - 平滑重启 Web 服务并重新加载配置
-  4. 启动桌面版.bat     - 打开 DBQuery Windows 客户端桌面版图形界面
-  5. config.ini         - 主配置文件（可配置端口 port、数据源、超时等）
+  1. 启动Web服务.bat      - 启动后台 Web 服务（双击手动运行，自动放行防火墙并静默运行）
+  2. AlwaysUp服务启动.bat - AlwaysUp/Windows服务专用启动脚本（常驻阻塞运行，带存活监听）
+  3. 停止Web服务.bat      - 一键停止后台运行的 Web 服务
+  4. 重启Web服务.bat      - 平滑重启 Web 服务并重新加载配置
+  5. 启动桌面版.bat       - 打开 DBQuery Windows 客户端桌面版图形界面
+  6. config.ini           - 主配置文件（可配置端口 port、数据源、超时等）
+
+【AlwaysUp 服务与存活监听配置】
+  - 应用程序 (Application) : 选择根目录下的 AlwaysUp服务启动.bat（或 dist\\DBQuery.exe 参数填 --web）
+  - 工作目录 (Directory)   : 必须设置为部署包根目录 DBQuery_Deploy
+  - 健康监听 (Sanity Check): 勾选 HTTP URL 监听，填入 http://127.0.0.1:6091/api/health
+    * 状态码: 200，频率: 60秒，失败动作: Restart the application
+    * 现场可双击“运维工具\\检查Web服务健康状态.bat”快速验证监听响应
+  - 详细教程参考 docs/ALWAYSUP_SERVICE_GUIDE.md
 
 【目录规划】
   - forms/    : 报表查询方案文件（*.qry），按需添加或修改业务方案
@@ -411,7 +576,7 @@ def clean_root_obsolete_files(target_dir):
     allowed_dirs = {'dist', 'forms', 'docs', 'sdk', '运维工具', 'logs'}
     exact_allowed_files = {
         'config.ini', '使用说明.txt',
-        '启动web服务.bat', '停止web服务.bat', '重启web服务.bat', '启动桌面版.bat'
+        '启动web服务.bat', 'alwaysup服务启动.bat', '停止web服务.bat', '重启web服务.bat', '启动桌面版.bat'
     }
 
     for item in list(os.listdir(target_dir)):
@@ -524,7 +689,7 @@ def assemble_deployment_folder(target_dir):
     # 5. 文档集中归类到 docs/ 目录
     docs_dir = os.path.join(target_dir, "docs")
     os.makedirs(docs_dir, exist_ok=True)
-    for doc in ["README.md", "FRONTEND_INTEGRATION.md", "HOST_INTEGRATION.md"]:
+    for doc in ["README.md", "FRONTEND_INTEGRATION.md", "HOST_INTEGRATION.md", "ALWAYSUP_SERVICE_GUIDE.md"]:
         src_doc = os.path.join(REPO_DIR, doc)
         if not os.path.exists(src_doc):
             src_doc = os.path.join(ROOT_DIR, "DBQuery", doc)
@@ -563,6 +728,8 @@ def assemble_deployment_folder(target_dir):
         open(gitkeep, "w").close()
 
     # 7. 根目录：仅保留核心易用批处理与使用说明
+    with open(os.path.join(target_dir, "AlwaysUp服务启动.bat"), "w", encoding="gbk") as f:
+        f.write(ALWAYSUP_SERVICE_BAT)
     with open(os.path.join(target_dir, "启动Web服务.bat"), "w", encoding="gbk") as f:
         f.write(START_WEB_CN)
     with open(os.path.join(target_dir, "停止Web服务.bat"), "w", encoding="gbk") as f:
@@ -581,6 +748,12 @@ def assemble_deployment_folder(target_dir):
         f.write(SHORTCUT_BAT)
     with open(os.path.join(tools_dir, "刷新Windows图标缓存.bat"), "w", encoding="gbk") as f:
         f.write(ICON_CACHE_BAT)
+    with open(os.path.join(tools_dir, "检查Web服务健康状态.bat"), "w", encoding="gbk") as f:
+        f.write(CHECK_HEALTH_BAT)
+    with open(os.path.join(tools_dir, "check_health.bat"), "w", encoding="gbk") as f:
+        f.write(CHECK_HEALTH_BAT)
+    with open(os.path.join(tools_dir, "service_web.bat"), "w", encoding="gbk") as f:
+        f.write(ALWAYSUP_SERVICE_BAT)
     with open(os.path.join(tools_dir, "start_web.bat"), "w", encoding="gbk") as f:
         f.write(RELAY_START_WEB)
     with open(os.path.join(tools_dir, "stop_web.bat"), "w", encoding="gbk") as f:

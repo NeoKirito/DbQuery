@@ -862,6 +862,31 @@ def logout():
     return redirect(url_for('login'))
 
 
+SERVER_START_TIME = time.time()
+
+
+@app.route('/api/health', methods=['GET', 'HEAD', 'OPTIONS'])
+@app.route('/health', methods=['GET', 'HEAD', 'OPTIONS'])
+def health_check():
+    """轻量级存活与健康检查接口，供 AlwaysUp Sanity Check、Nginx 探针等监控调用（免鉴权）。"""
+    if request.method == 'OPTIONS':
+        resp = make_response('', 204)
+        resp.headers['Access-Control-Allow-Origin'] = '*'
+        resp.headers['Access-Control-Allow-Methods'] = 'GET, HEAD, OPTIONS'
+        resp.headers['Access-Control-Allow-Headers'] = '*'
+        return resp
+
+    uptime = int(time.time() - SERVER_START_TIME)
+    resp = jsonify({
+        'status': 'ok',
+        'service': 'DBQuery Web Server',
+        'uptime_seconds': uptime,
+        'timestamp': int(time.time()),
+    })
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    return resp, 200
+
+
 @app.route('/')
 @login_required
 def index():
